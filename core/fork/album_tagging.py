@@ -204,6 +204,42 @@ def _album_artist(album: Dict[str, Any], artist: Dict[str, Any]) -> str:
     return names[0] if names else ""
 
 
+ARTIST_SEPARATOR = "; "
+# "A, B" / "A & B" / "A、B" / "A / B" / "A feat. B" / "A FT B" / "A featuring B" / "A x B" …
+_CREDIT_SEPARATORS_RE = re.compile(
+    r"\s*[,;、，；]\s*|\s+[&/×+]\s+|\s*\(?\b(?:feat\.?|ft\.?|featuring)\s+|\s+(?:with|vs\.?|x)\s+", re.I)
+
+
+def split_credit(text: str) -> List[str]:
+    """The individual artists in a credit string. A string that is itself one
+    known artist ("Simon & Garfunkel") is returned whole."""
+    from core.fork import artist_names
+
+    text = " ".join(str(text or "").split())
+    if not text:
+        return []
+    parts = [p.strip(" )") for p in _CREDIT_SEPARATORS_RE.split(text)]
+    parts = [p for p in parts if p]
+    if len(parts) <= 1 or artist_names.is_single_artist(text):
+        return [text]
+    return parts
+
+
+def join_artists(names: List[str], apply_rules: bool) -> str:
+    """``"A; B; C"`` from credit strings that may each hide several artists,
+    with artist rules applied per artist and duplicates removed."""
+    from core.fork import artist_names
+
+    out: List[str] = []
+    for credit in names:
+        for name in split_credit(credit):
+            if apply_rules:
+                name = artist_names.resolve(name)
+            if name and name.casefold() not in {n.casefold() for n in out}:
+                out.append(name)
+    return ARTIST_SEPARATOR.join(out)
+
+
 def source_tags(album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, Any],
                 position: int) -> Dict[str, Any]:
     """Tag values exactly as the metadata source gives them."""
@@ -224,8 +260,12 @@ def source_tags(album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, 
 
 
 def proposals(album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[str, Any]],
-              apply_rules: bool) -> List[Dict[str, Any]]:
-    """Per track: ``{"source": tags from the source, "proposed": tags to write}``."""
+              apply_rules: bool, semicolons: bool = True) -> List[Dict[str, Any]]:
+    """Per track: ``{"source": tags from the source, "proposed": tags to write}``.
+
+    ``semicolons`` rewrites Artist and Album artist as ``"A; B"`` whatever
+    separator the source used ("A, B", "A & B", "A feat. B").
+    """
     out = []
     for position, track in enumerate(tracks):
         source = source_tags(album, artist, track, position)
@@ -235,6 +275,15 @@ def proposals(album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[s
                 proposed.update({k: v for k, v in tags.transform_values(source).items() if isinstance(v, str)})
             except Exception as exc:
                 logger.warning("Could not apply rules to %r: %s", source.get("title"), exc)
+        if semicolons:
+            try:
+                # the source's own artist LIST is the best split there is; each
+                # entry is still checked for a separator hiding inside it
+                names = _artist_names(track) or [source["artist"]]
+                proposed["artist"] = join_artists(names, apply_rules) or proposed["artist"]
+                proposed["albumartist"] = join_artists([source["albumartist"]], apply_rules) or proposed["albumartist"]
+            except Exception as exc:
+                logger.warning("Could not normalise artist separators for %r: %s", source.get("title"), exc)
         out.append({"source": source, "proposed": proposed})
     return out
 
@@ -417,10 +466,10 @@ def match_files(files: List[Dict[str, Any]], tracks: List[Dict[str, Any]],
 
 
 def preview(folder: str, album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[str, Any]],
-            apply_rules: bool = True) -> Dict[str, Any]:
+            apply_rules: bool = True, semicolons: bool = True) -> Dict[str, Any]:
     real = safe_dir(folder)
     files = scan_folder(real)
-    props = proposals(album, artist, tracks, apply_rules)
+    props = proposals(album, artist, tracks, apply_rules, semicolons)
     assigned = match_files(files, tracks, props)
     rows = []
     for f_idx, file in enumerate(files):

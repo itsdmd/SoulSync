@@ -190,3 +190,43 @@ def resolve_list(names: Any, allow_lookup: bool = True) -> Optional[List[str]]:
     if not isinstance(names, (list, tuple)):
         return None
     return [resolve(n, allow_lookup) if isinstance(n, str) else n for n in names]
+
+
+_single_artist_cache: Dict[str, bool] = {}
+
+
+def is_single_artist(name: str) -> bool:
+    """Whether ``name`` is ONE artist even though it contains something that
+    looks like a separator ("Simon & Garfunkel", "Tyler, The Creator").
+
+    True when a tagging rule exists for the exact name, or MusicBrainz lists
+    an artist under exactly this name. When MusicBrainz cannot be asked the
+    answer is True: leaving a credit whole is the safe mistake.
+    """
+    key = (name or "").strip()
+    if not key:
+        return True
+    folded = key.casefold()
+    if folded in _single_artist_cache:
+        return _single_artist_cache[folded]
+    row = store.get_artist_name(key)
+    if row and row["source"] != "none":
+        return True
+    try:
+        results = _mb_client().search_artist(key, limit=5, strict=False, raise_on_error=True)
+    except Exception as exc:
+        logger.debug("Could not check %r on MusicBrainz: %s", key, exc)
+        return True  # not cached: ask again next time
+    known = False
+    for artist in results or []:
+        try:
+            score = int(artist.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        if score >= _MIN_SCORE and _matches(artist, key):
+            known = True
+            break
+    if len(_single_artist_cache) > 5000:
+        _single_artist_cache.clear()
+    _single_artist_cache[folded] = known
+    return known

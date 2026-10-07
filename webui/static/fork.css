@@ -421,3 +421,10 @@ select.fork-album-input option { background: #181818; }
     cursor: default;
     box-shadow: none;
 }
+
+.fork-album-retry {
+    margin-left: 4px;
+    color: rgb(var(--accent-light-rgb, var(--accent-rgb)));
+    text-decoration: underline;
+    cursor: pointer;
+}

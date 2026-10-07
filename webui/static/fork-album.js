@@ -78,24 +78,43 @@
             const data = await api('/check', payload(process));
             // a download run started meanwhile owns these cells now
             if ((getProcess(id) || {}).status !== 'idle') return;
+            // Elements are looked up by id / walked, never by a CSS selector built
+            // from the modal id: real ids contain "::" (702041953::soulsync), which
+            // is not valid inside a selector.
+            const tbody = document.getElementById(`download-tracks-tbody-${id}`);
+            const boxes = new Map();
+            if (tbody) {
+                for (const box of tbody.getElementsByClassName('track-select-cb')) boxes.set(String(box.dataset.trackIndex), box);
+            }
             for (const row of data.tracks) {
                 const cell = document.getElementById(`match-${id}-${row.index}`);
-                if (!cell) continue;
-                cell.textContent = row.found ? '✅ Found' : '❌ Missing';
-                cell.className = `track-match-status ${row.found ? 'match-found' : 'match-missing'}`;
-                cell.title = row.found ? (row.file || row.library_title || '') : '';
+                if (cell) {
+                    cell.textContent = row.found ? '✅ Found' : '❌ Missing';
+                    cell.className = `track-match-status ${row.found ? 'match-found' : 'match-missing'}`;
+                    cell.title = row.found ? (row.file || row.library_title || '') : '';
+                }
                 // leave owned tracks unticked so "Download missing" means missing
-                const box = document.querySelector(`#download-tracks-tbody-${id} .track-select-cb[data-track-index="${row.index}"]`);
+                const box = boxes.get(String(row.index));
                 if (box && row.found) box.checked = false;
             }
-            if (typeof window.updateTrackSelectionCount === 'function') window.updateTrackSelectionCount(id);
+            try {
+                if (typeof window.updateTrackSelectionCount === 'function') window.updateTrackSelectionCount(id);
+            } catch (err) { console.warn('[fork] selection count not refreshed:', err); }
             if (label) label.textContent = `${data.found} of ${data.total} in library`;
             const fill = document.getElementById(`analysis-progress-fill-${id}`);
             if (fill) fill.style.width = '100%';
             if (!state.folderChosen) setFolder(state, data.folder || '');
         } catch (err) {
-            if (label) label.textContent = 'Library check failed';
             console.warn('[fork] album check failed:', err);
+            if (!label) return;
+            // say what went wrong and offer another go, instead of a dead end
+            label.replaceChildren(
+                `Library check failed: ${(err && err.message) || 'unknown error'} `,
+                el('a', {
+                    href: '#', class: 'fork-album-retry', text: 'Retry',
+                    onclick: (e) => { e.preventDefault(); runCheck(id, state); },
+                }),
+            );
         }
     }
 
@@ -254,7 +273,7 @@
     function openTagger(state) {
         const process = getProcess(state.id);
         if (!process || !state.folder) return;
-        const opts = { applyRules: true, rename: false };
+        const opts = { applyRules: true, semicolons: true, rename: false };
         let data = null;
         let rows = [];   // {rel, current, track, include, tags:{}, reason}
 
@@ -282,6 +301,8 @@
             el('div', { class: 'fork-album-options' }, [
                 check('Use my artist rules and translations', 'applyRules',
                     'Off: propose exactly what the metadata source reports.', () => load()),
+                check('Separate multiple artists with semicolons', 'semicolons',
+                    'Writes "A; B" instead of "A, B", "A & B" or "A feat. B" in Artist and Album artist. A name MusicBrainz or your rules know as one artist is left whole.', () => load()),
                 check('Also rename/move files to my path format', 'rename',
                     'Off (default): only tags change; files stay where they are.'),
             ]),
@@ -372,7 +393,7 @@
                 ? 'Reading files and preparing tags (translating new names can take a moment)…'
                 : 'Reading files…' }));
             try {
-                data = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules }));
+                data = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules, semicolons: opts.semicolons }));
             } catch (err) {
                 body.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
                 return;
@@ -398,6 +419,7 @@
                     folder: state.folder,
                     rename: opts.rename,
                     apply_rules: opts.applyRules,
+                    semicolons: opts.semicolons,
                     rows: chosen.map((r) => ({
                         rel: r.rel, track: r.track,
                         tags: Object.assign({}, r.tags, { album: albumInput.value, year: yearInput.value }),

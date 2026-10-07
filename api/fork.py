@@ -242,7 +242,8 @@ def album_tag_preview():
         return jsonify(success=False, error="No tracks given"), 400
     try:
         data = album_tagging.preview(str(body.get("folder") or ""), album, artist, tracks,
-                                     apply_rules=body.get("apply_rules", True) is not False)
+                                     apply_rules=body.get("apply_rules", True) is not False,
+                                     semicolons=body.get("semicolons", True) is not False)
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         return _folder_error(exc)
     return jsonify(success=True, **data)

@@ -39,6 +39,16 @@ def library(tmp_path, monkeypatch):
     (tmp_path / "elsewhere").mkdir()
     monkeypatch.setattr(album_tagging, "allowed_roots", lambda: [os.path.realpath(str(root))])
     monkeypatch.setattr(album_tagging.tags, "_save", lambda audio: audio.save())
+    # MusicBrainz stand-in: knows these exact names as single artists
+    known = {"simon & garfunkel", "tyler, the creator", "chloe x halle"}
+
+    class FakeMB:
+        def search_artist(self, name, **kwargs):
+            return [{"name": name, "score": 100, "aliases": []}] if name.casefold() in known else []
+
+    from core.fork import artist_names
+    monkeypatch.setattr(artist_names, "_mb_client", lambda: FakeMB())
+    artist_names._single_artist_cache.clear()
     store.save_artist_name("周杰倫", "Jay Chou", "manual")
     store.save_translation("album", "十一月的蕭邦", "November's Chopin", model="m")
     store.save_translation("title", "夜曲", "Nocturne", model="m")
@@ -81,7 +91,7 @@ def test_preview_matches_files_despite_drifted_tags_and_proposes_rule_applied_na
                         "album": "November's Chopin (十一月的蕭邦)", "year": "2005",
                         "track_number": 1, "disc_number": 1}
     # the per-track credit is restored, with the rule applied to each name
-    assert data["tracks"][2]["proposed"]["artist"] == "Jay Chou, Lara"
+    assert data["tracks"][2]["proposed"]["artist"] == "Jay Chou; Lara"
     assert data["tracks"][2]["proposed"]["albumartist"] == "Jay Chou"
 
 
@@ -215,3 +225,55 @@ def test_search_folders_stops_at_the_limit(library):
         (library / f"Artist {i}").mkdir()
     data = album_tagging.search_folders("artist", limit=4)
     assert len(data["results"]) == 4 and data["truncated"] is True
+
+
+def test_split_credit_handles_the_common_separators(library):
+    split = album_tagging.split_credit
+    assert split("A, B & C") == ["A", "B", "C"]
+    assert split("A feat. B") == ["A", "B"] and split("A FT. B") == ["A", "B"] and split("A ft B") == ["A", "B"]
+    assert split("A (feat. B)") == ["A", "B"] and split("A featuring B") == ["A", "B"]
+    assert split("A、B；C") == ["A", "B", "C"] and split("A / B") == ["A", "B"] and split("A x B") == ["A", "B"]
+    assert split("A; B") == ["A", "B"]
+    # not separators: no surrounding spaces, or part of a word
+    assert split("AC/DC") == ["AC/DC"] and split("Daft Punk") == ["Daft Punk"] and split("Lil Nas X") == ["Lil Nas X"]
+    assert split("Florence + the Machine") == ["Florence", "the Machine"]  # unknown to the stand-in: split
+
+
+def test_a_known_single_artist_is_never_split(library):
+    assert album_tagging.split_credit("Simon & Garfunkel") == ["Simon & Garfunkel"]
+    assert album_tagging.split_credit("Tyler, The Creator") == ["Tyler, The Creator"]
+    assert album_tagging.split_credit("Chloe x Halle") == ["Chloe x Halle"]
+    store.save_artist_name("Florence + the Machine", "Florence + the Machine", "manual")
+    assert album_tagging.split_credit("Florence + the Machine") == ["Florence + the Machine"]
+
+
+def test_proposals_use_semicolons_for_artist_and_album_artist(library):
+    album = {"name": "Collab", "release_date": "2020"}
+    tracks = [
+        {"name": "One", "artists": [{"name": "周杰倫"}, {"name": "Lara & Friends"}], "track_number": 1},
+        {"name": "Two", "artists": [{"name": "Simon & Garfunkel"}, {"name": "周杰倫 feat. Lara"}], "track_number": 2},
+        {"name": "Three", "artists": [], "track_number": 3},
+    ]
+    props = album_tagging.proposals(album, {"name": "周杰倫, Lara"}, tracks, apply_rules=True)
+    assert props[0]["proposed"]["artist"] == "Jay Chou; Lara; Friends"
+    assert props[1]["proposed"]["artist"] == "Simon & Garfunkel; Jay Chou; Lara"   # deduplicated, rule applied
+    assert props[2]["proposed"]["artist"] == "Jay Chou; Lara"                       # falls back to the album artist
+    assert all(p["proposed"]["albumartist"] == "Jay Chou; Lara" for p in props)
+    # without rules: same splitting, original names
+    raw = album_tagging.proposals(album, {"name": "周杰倫, Lara"}, tracks, apply_rules=False)
+    assert raw[0]["proposed"]["artist"] == "周杰倫; Lara; Friends"
+    # option off: the source's own formatting is kept
+    off = album_tagging.proposals(album, {"name": "周杰倫, Lara"}, tracks, apply_rules=False, semicolons=False)
+    assert off[0]["proposed"]["artist"] == "周杰倫, Lara & Friends" and off[0]["proposed"]["albumartist"] == "周杰倫, Lara"
+
+
+def test_musicbrainz_outage_leaves_an_ambiguous_credit_whole(library, monkeypatch):
+    from core.fork import artist_names
+
+    class Down:
+        def search_artist(self, name, **kwargs):
+            raise RuntimeError("timeout")
+
+    monkeypatch.setattr(artist_names, "_mb_client", lambda: Down())
+    artist_names._single_artist_cache.clear()
+    assert album_tagging.split_credit("Earth, Wind & Fire") == ["Earth, Wind & Fire"]
