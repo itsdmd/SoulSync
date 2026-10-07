@@ -2812,3 +2812,27 @@ def _has_remaining_audio(directory: str) -> bool:
     except OSError:
         return True  # Safer to assume "yes, leave it" if we can't check
     return False
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The untranslated lyrics backup (<name>.original.lrc) travels with its track.
+# The in-place rename moves no sidecars at all, so there the translated .lrc
+# the backup belongs to is carried too. See FORK.md.
+_upstream_finalize_track = _finalize_track
+_upstream_rename_track_in_place = _rename_track_in_place
+
+
+def _finalize_track(ctx: _RunContext, track_id, resolved_src, new_path) -> bool:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    landed = _upstream_finalize_track(ctx, track_id, resolved_src, new_path)
+    if landed:
+        _fork_hooks.move_lyrics_backup(resolved_src, new_path)
+    return landed
+
+
+def _rename_track_in_place(current_abs: str, new_abs: str) -> Tuple[bool, Optional[str]]:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    ok, err = _upstream_rename_track_in_place(current_abs, new_abs)
+    if ok:
+        _fork_hooks.move_lyrics_backup(current_abs, new_abs, with_partner=True)
+    return ok, err

@@ -11460,6 +11460,8 @@ def library_delete_track(track_id):
                         os.remove(resolved)
                         file_deleted = True
                         logger.info(f"Deleted file from disk: {resolved}")
+                        from core.fork import hooks as _fork_hooks
+                        _fork_hooks.remove_lyrics_backup(resolved)  # fork
                         # Clean up sidecar files (.lrc, .txt lyrics, cover.jpg)
                         base_no_ext = os.path.splitext(resolved)[0]
                         for sidecar_ext in ('.lrc', '.txt'):
@@ -12265,6 +12267,8 @@ def library_delete_album(album_id):
                         try:
                             os.remove(resolved)
                             files_deleted += 1
+                            from core.fork import hooks as _fork_hooks
+                            _fork_hooks.remove_lyrics_backup(resolved)  # fork
                             # Clean up sidecar files (.lrc, .txt lyrics)
                             base_no_ext = os.path.splitext(resolved)[0]
                             for sidecar_ext in ('.lrc', '.txt'):

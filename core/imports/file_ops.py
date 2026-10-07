@@ -996,3 +996,25 @@ def move_companion_sidecars(src_audio, dst_audio) -> List[str]:
                 logger.warning(f"Could not move sidecar {candidate}: {e}")
             break
     return moved
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The untranslated lyrics backup (<name>.original.lrc) travels with its track.
+# See FORK.md.
+_upstream_move_companion_sidecars = move_companion_sidecars
+_upstream_downsample_hires_flac = downsample_hires_flac
+
+
+def move_companion_sidecars(src_audio, dst_audio) -> List[str]:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    moved = _upstream_move_companion_sidecars(src_audio, dst_audio)
+    _fork_hooks.move_lyrics_backup(src_audio, dst_audio)
+    return moved
+
+
+def downsample_hires_flac(final_path, context, enabled=None):  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    result = _upstream_downsample_hires_flac(final_path, context, enabled=enabled)
+    if isinstance(result, str) and result != final_path:
+        _fork_hooks.move_lyrics_backup(final_path, result)
+    return result

@@ -33,6 +33,13 @@ a minute at a time and everything else behaves like upstream.
   never comes from the model.
 - **Originals are kept** in `SOULSYNC_ORIGINAL_TITLE / _ALBUM / _ARTIST /
   _ALBUMARTIST` tags when a value is rewritten.
+- **Lyrics backups travel with the track.** `<name>.original.lrc` is moved and
+  renamed wherever SoulSync moves a track's lyrics (import, both reorganize
+  modes, the repair jobs that rename files, the downsample rename) and deleted
+  when the track is deleted. If upstream adds a new place that moves `.lrc`
+  files, it needs a `move_lyrics_backup(src, dst)` call too; a backup that does
+  get stranded is removed by the Empty Folder Cleaner once its folder has no
+  audio left.
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -106,9 +113,13 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/imports/pipeline.py` | ReplayGain condition; EOF wrapper around `_apply_profile_output_transforms` |
 | `core/imports/routes.py` | 2 × `mark_rename_only(...)` |
 | `core/auto_import_worker.py` | 2 lines: rename-only for the watcher |
+| `core/imports/file_ops.py` | EOF wrappers: `move_companion_sidecars`, `downsample_hires_flac` (lyrics backup follows the track) |
+| `core/library_reorganize.py` | EOF wrappers: `_finalize_track`, `_rename_track_in_place` (same) |
+| `core/repair_jobs/track_number_repair.py` | EOF wrapper: `_rename_to_basename` (same) |
+| `core/repair_worker.py`, `core/repair_jobs/unknown_artist_fixer.py` | 2 lines at each sidecar move (same) |
 | `core/downloads/master.py` | 7 lines: external-id ownership before a track is queued |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
-| `web_server.py` | registers the `api/fork.py` blueprint |
+| `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
 | `webui/index.html` | one `<script>` tag for `fork-ui.js` |
 | `webui/src/routes/artist-detail/-artist-detail.discography-modal.ts` | ownership fallback, `hideOwned` filter |
 | `webui/src/routes/artist-detail/-ui/discography-modal.tsx` | "Hide owned" button |

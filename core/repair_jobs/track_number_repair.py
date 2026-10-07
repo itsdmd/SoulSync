@@ -1438,3 +1438,17 @@ def _get_musicbrainz_id_via_audiodb(artist_name: str, album_name: str,
     except Exception as e:
         logger.debug("AudioDB lookup failed for '%s - %s': %s", artist_name, album_name, e)
     return None
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The untranslated lyrics backup (<name>.original.lrc) is renamed with its
+# track. See FORK.md.
+_upstream_rename_to_basename = _rename_to_basename
+
+
+def _rename_to_basename(file_path: str, filename: str, new_basename: str) -> Optional[str]:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    new_path = _upstream_rename_to_basename(file_path, filename, new_basename)
+    if new_path:
+        _fork_hooks.move_lyrics_backup(file_path, new_path)
+    return new_path

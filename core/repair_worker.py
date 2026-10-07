@@ -4139,6 +4139,8 @@ class RepairWorker:
                         shutil.move(resolved, expected_abs)
                     final_path = expected_abs
 
+                    from core.fork import hooks as _fork_hooks
+                    _fork_hooks.move_lyrics_backup(resolved, expected_abs)  # fork
                     # Move sidecars
                     src_dir = os.path.dirname(resolved)
                     dst_dir = os.path.dirname(expected_abs)
@@ -5435,6 +5437,8 @@ class RepairWorker:
             else:
                 shutil.move(src, dst)
 
+            from core.fork import hooks as _fork_hooks
+            _fork_hooks.move_lyrics_backup(src, dst)  # fork
             # Move sidecar files (.lrc, cover art, etc.)
             src_dir = os.path.dirname(src)
             dst_dir = os.path.dirname(dst)

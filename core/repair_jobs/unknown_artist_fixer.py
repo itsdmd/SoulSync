@@ -550,6 +550,8 @@ class UnknownArtistFixerJob(RepairJob):
                     final_path = expected_abs
                     logger.info(f"Moved: {os.path.basename(current_norm)} → {expected_rel}")
 
+                    from core.fork import hooks as _fork_hooks
+                    _fork_hooks.move_lyrics_backup(current_norm, expected_abs)  # fork
                     # Move sidecars
                     src_dir = os.path.dirname(current_norm)
                     dst_dir = os.path.dirname(expected_abs)

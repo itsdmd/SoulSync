@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from typing import Dict, List, Optional, Tuple
 
 from core.fork import config, ollama
@@ -186,3 +187,56 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
     logger.info("Translated lyrics (%s lines, %s) -> %s", len(translations),
                 "inline" if inline else "original kept as .original", os.path.basename(sidecar))
     return rendered
+
+
+_BACKUP_EXTS = (".lrc", ".txt")
+
+
+def _stem(audio_path: str) -> str:
+    return os.path.splitext(str(audio_path))[0]
+
+
+def move_backups(src_audio: str, dst_audio: str, with_partner: bool = False) -> List[str]:
+    """Carry ``<stem>.original.lrc`` / ``.original.txt`` from next to
+    ``src_audio`` to next to ``dst_audio``, renamed to the new stem.
+
+    ``with_partner`` also moves the translated ``<stem>.lrc`` that the backup
+    belongs to, for callers that move the audio but no sidecars at all. If the
+    destination already has a backup (lyrics were regenerated there) the stale
+    source copy is removed instead, so nothing is left behind. Best-effort:
+    returns the destination paths that now exist, never raises.
+    """
+    moved: List[str] = []
+    src_stem, dst_stem = _stem(src_audio), _stem(dst_audio)
+    if not src_stem or not dst_stem or os.path.normpath(src_stem) == os.path.normpath(dst_stem):
+        return moved
+    for ext in _BACKUP_EXTS:
+        pairs = [(f"{src_stem}.original{ext}", f"{dst_stem}.original{ext}")]
+        if with_partner and os.path.isfile(pairs[0][0]):
+            pairs.append((src_stem + ext, dst_stem + ext))
+        for src, dst in pairs:
+            if not os.path.isfile(src):
+                continue
+            try:
+                if os.path.exists(dst):
+                    os.remove(src)
+                else:
+                    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                    shutil.move(src, dst)
+                    logger.info("Moved lyrics file with its track: %s", os.path.basename(dst))
+                moved.append(dst)
+            except OSError as exc:
+                logger.warning("Could not move lyrics file %s: %s", src, exc)
+    return moved
+
+
+def remove_backups(audio_path: str) -> None:
+    """Delete the lyrics backups of a track that is being deleted."""
+    stem = _stem(audio_path)
+    for ext in _BACKUP_EXTS:
+        path = f"{stem}.original{ext}"
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                logger.debug("Could not remove lyrics backup %s: %s", path, exc)

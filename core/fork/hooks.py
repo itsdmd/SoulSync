@@ -185,3 +185,28 @@ def owned_by_external_id(db: Any, track: Any, server_source: Optional[str] = Non
     except Exception as exc:
         logger.debug("owned_by_external_id failed: %s", exc)
         return None
+
+
+# ── lyrics backups (<name>.original.lrc) follow their track ─────────────
+# Deliberately NOT gated on _active(): these only ever act on files the fork
+# itself created, and must keep working if the feature is later switched off.
+
+def move_lyrics_backup(src_audio: Any, dst_audio: Any, with_partner: bool = False) -> None:
+    try:
+        if not src_audio or not dst_audio:
+            return
+        from core.fork import lyrics
+
+        lyrics.move_backups(str(src_audio), str(dst_audio), with_partner)
+    except Exception as exc:
+        logger.warning("move_lyrics_backup failed for %s: %s", src_audio, exc)
+
+
+def remove_lyrics_backup(audio_path: Any) -> None:
+    try:
+        if audio_path:
+            from core.fork import lyrics
+
+            lyrics.remove_backups(str(audio_path))
+    except Exception as exc:
+        logger.debug("remove_lyrics_backup failed for %s: %s", audio_path, exc)
