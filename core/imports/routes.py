@@ -1054,6 +1054,8 @@ def album_process(runtime: ImportRouteRuntime, data: Dict[str, Any]) -> tuple[Di
                 context['_skip_quarantine_check'] = ['quality', 'bit_depth']
                 if runtime.profile_id:
                     context['profile_id'] = runtime.profile_id
+                from core.fork import hooks as _fork_hooks
+                _fork_hooks.mark_rename_only(context, data.get("rename_only"))  # fork
 
             try:
                 runtime.post_process_matched_download(context_key, context, file_path)
@@ -1163,6 +1165,8 @@ def process_single_import_file(runtime: ImportRouteRuntime, file_info: Dict[str,
         context['_skip_quarantine_check'] = ['quality', 'bit_depth']
         if runtime.profile_id:
             context['profile_id'] = runtime.profile_id
+        from core.fork import hooks as _fork_hooks
+        _fork_hooks.mark_rename_only(context, file_info.get("rename_only"))  # fork
         artist_data = runtime.get_import_context_artist(context)
         track_data = runtime.get_import_track_info(context)
         final_title = track_data.get("name", title)

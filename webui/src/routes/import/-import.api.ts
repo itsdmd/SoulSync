@@ -26,6 +26,8 @@ import type {
   QualityProfilesPayload,
 } from './-import.types';
 
+import { getRenameOnly } from './-import.fork';
+
 export const IMPORT_QUERY_KEY = ['import'] as const;
 
 // Per-track import does heavy synchronous enrichment server-side (metadata
@@ -144,7 +146,11 @@ export async function processImportAlbumTrack(input: {
   album: ImportAlbum;
   match: ImportAlbumMatch;
 }): Promise<ImportProcessPayload> {
-  return runImportJob('import/album/process', { album: input.album, matches: [input.match] });
+  return runImportJob('import/album/process', {
+    album: input.album,
+    matches: [input.match],
+    rename_only: getRenameOnly(), // fork
+  });
 }
 
 export async function searchImportTracks(query: string): Promise<ImportTrackSearchPayload> {
@@ -159,7 +165,10 @@ export async function searchImportTracks(query: string): Promise<ImportTrackSear
 }
 
 export async function processImportSingleFile(file: unknown): Promise<ImportProcessPayload> {
-  return runImportJob('import/singles/process', { files: [file] });
+  // fork: rename_only rides on the file entry, which the server reads per file
+  const entry =
+    getRenameOnly() && file && typeof file === 'object' ? { ...file, rename_only: true } : file;
+  return runImportJob('import/singles/process', { files: [entry] });
 }
 
 export async function fetchAutoImportStatus(): Promise<ImportAutoImportStatusPayload> {

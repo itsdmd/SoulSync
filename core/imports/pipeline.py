@@ -1641,7 +1641,7 @@ def post_process_matched_download(context_key, context, file_path, runtime, meta
         download_cover_art(album_info, os.path.dirname(final_path), context)
         generate_lrc_file(final_path, context, artist_context, album_info)
 
-        if config_manager.get('post_processing.replaygain_enabled', False):
+        if config_manager.get('post_processing.replaygain_enabled', False) and not context.get('_fork_rename_only'):  # fork
             try:
                 from core.replaygain import analyze_track as _rg_analyze, write_replaygain_tags as _rg_write, is_ffmpeg_available as _rg_ffmpeg_ok, get_target_lufs as _rg_target
                 if _rg_ffmpeg_ok():
@@ -2171,3 +2171,15 @@ def post_process_matched_download_with_verification(context_key, context, file_p
             if context_key in matched_downloads_context:
                 del matched_downloads_context[context_key]
         _notify_download_completed(batch_id, task_id, success=False)
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Rename-only imports keep the file byte-for-byte: no downsample / lossy copy.
+# See FORK.md.
+_upstream_apply_profile_output_transforms = _apply_profile_output_transforms
+
+
+def _apply_profile_output_transforms(final_path: str, context: dict, profile: dict) -> str:  # noqa: F811
+    if isinstance(context, dict) and context.get('_fork_rename_only'):
+        return final_path
+    return _upstream_apply_profile_output_transforms(final_path, context, profile)

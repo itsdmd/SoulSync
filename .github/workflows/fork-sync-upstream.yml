@@ -1,0 +1,116 @@
+name: "Fork: sync upstream"
+
+# Keeps this fork current with Nezreka/SoulSync.
+#   main    mirrors upstream/main exactly (fast-forward only, never edited here)
+#   custom  = main + the fork's changes; upstream is MERGED into it
+# A clean merge is pushed and a new image is built. A conflict opens (or
+# updates) an issue listing the files and leaves `custom` untouched.
+#
+# Set a SYNC_TOKEN secret (PAT with contents, workflows and issues write) so
+# merges that touch upstream's workflow files can be pushed; the default
+# GITHUB_TOKEN is not allowed to.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fork-sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+env:
+  UPSTREAM_REPO: Nezreka/SoulSync
+  UPSTREAM_BRANCH: main
+  MIRROR_BRANCH: main
+  FORK_BRANCH: custom
+
+jobs:
+  sync:
+    if: github.repository != 'Nezreka/SoulSync'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.FORK_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin "${MIRROR_BRANCH}"
+
+      - name: Fast-forward the mirror branch
+        run: |
+          if git merge-base --is-ancestor "origin/${MIRROR_BRANCH}" "upstream/${UPSTREAM_BRANCH}"; then
+            git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${MIRROR_BRANCH}"
+          else
+            echo "::warning::${MIRROR_BRANCH} has commits upstream does not; leaving it alone."
+          fi
+
+      - name: Merge upstream into the fork branch
+        id: merge
+        run: |
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" HEAD; then
+            echo "Already up to date."
+            echo "result=current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-edit -m "Merge upstream ${UPSTREAM_REPO}@${UPSTREAM_BRANCH} into ${FORK_BRANCH}" "upstream/${UPSTREAM_BRANCH}"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "files<<EOF"
+              git diff --name-only --diff-filter=U
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the merge
+        if: steps.merge.outputs.result == 'merged'
+        run: git push origin "HEAD:${FORK_BRANCH}"
+
+      # A push made with GITHUB_TOKEN does not start other workflows, so the
+      # image build has to be asked for explicitly in that case.
+      - name: Start the image build
+        if: steps.merge.outputs.result == 'merged' && env.HAS_SYNC_TOKEN != 'true'
+        run: gh workflow run fork-docker.yml --ref "${FORK_BRANCH}"
+
+      - name: Close a stale conflict issue
+        if: steps.merge.outputs.result != 'conflict'
+        run: |
+          for n in $(gh issue list --state open --search "in:title \"Upstream sync conflict\"" --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Upstream merges cleanly again."
+          done
+
+      - name: Report the conflict
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          FILES: ${{ steps.merge.outputs.files }}
+        run: |
+          upstream_sha=$(git rev-parse --short "upstream/${UPSTREAM_BRANCH}")
+          body=$(printf 'Merging `%s@%s` (%s) into `%s` conflicts in:\n\n```\n%s\n```\n\nResolve locally:\n\n```\ngit fetch upstream && git checkout %s && git merge upstream/%s\n# fix the files above, then\ngit commit && git push\n```\n\n`FORK.md` lists every upstream file the fork touches and why.\n' \
+            "$UPSTREAM_REPO" "$UPSTREAM_BRANCH" "$upstream_sha" "$FORK_BRANCH" "$FILES" "$FORK_BRANCH" "$UPSTREAM_BRANCH")
+          existing=$(gh issue list --state open --search "in:title \"Upstream sync conflict\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Upstream sync conflict" --body "$body"
+          fi
+          echo "::error::Upstream merge conflicts; see the issue."
+          exit 1

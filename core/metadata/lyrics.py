@@ -68,3 +68,15 @@ def generate_lrc_file(file_path: str, context: dict, artist: dict, album_info: d
     except Exception as exc:
         logger.error("Error generating LRC file for %s: %s", file_path, exc)
         return False
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Rename-only imports must not embed lyrics into the file. See FORK.md.
+_upstream_generate_lrc_file = generate_lrc_file
+
+
+def generate_lrc_file(file_path: str, context: dict, artist: dict, album_info: dict) -> bool:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    if _fork_hooks.is_rename_only(context):
+        return False
+    return _upstream_generate_lrc_file(file_path, context, artist, album_info)

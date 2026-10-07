@@ -214,3 +214,21 @@ class LyricsClient:
 
 # Global instance for easy import
 lyrics_client = LyricsClient()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Translate CJK lyrics after every successful sidecar creation. See FORK.md.
+_upstream_create_lrc_file = LyricsClient.create_lrc_file
+
+
+def _fork_create_lrc_file(self, audio_file_path: str, track_name: str, artist_name: str,
+                          album_name: str = None, duration_seconds: int = None) -> bool:
+    from core.fork import hooks as _fork_hooks
+    created = _upstream_create_lrc_file(
+        self, audio_file_path, track_name, artist_name, album_name, duration_seconds)
+    if created:
+        _fork_hooks.after_lyrics(audio_file_path, track_name, artist_name)
+    return created
+
+
+LyricsClient.create_lrc_file = _fork_create_lrc_file

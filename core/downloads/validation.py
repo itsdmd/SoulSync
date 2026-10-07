@@ -887,3 +887,16 @@ def _match_filename_candidates(results, spotify_track, profile_id=None, why=None
                   f"no folder or filename names {', '.join(map(str, spotify_artists))}",
                   getattr(candidate, 'confidence', None))
     return verified_candidates
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Wraps _select so results found by an LLM-suggested query can be scored
+# against that variant when nothing matched the original names. See FORK.md.
+_upstream_select = _select
+
+
+def _select(results, spotify_track, query, profile_id, why):  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    accepted = _upstream_select(results, spotify_track, query, profile_id, why)
+    return _fork_hooks.rescue_candidates(
+        accepted, results, spotify_track, query, _upstream_select, profile_id, why)

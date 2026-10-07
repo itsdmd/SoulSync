@@ -302,3 +302,21 @@ def enhance_file_metadata(file_path: str, context: dict, artist: dict, album_inf
             except Exception as restore_exc:
                 logger.debug("Tag/art persist after error failed: %s", restore_exc)
             return False
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Wraps enhance_file_metadata: skipped entirely for rename-only imports, and
+# followed by the fork's tag pass (artist rules + name translation) on the
+# tags upstream just wrote. See FORK.md.
+_upstream_enhance_file_metadata = enhance_file_metadata
+
+
+def enhance_file_metadata(file_path: str, context: dict, artist: dict, album_info: dict, runtime=None) -> bool:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    if _fork_hooks.is_rename_only(context):
+        logger.info("Rename-only import: leaving metadata untouched for %s", os.path.basename(file_path))
+        return True
+    result = _upstream_enhance_file_metadata(file_path, context, artist, album_info, runtime=runtime)
+    if result:
+        _fork_hooks.after_metadata_enhanced(file_path, context)
+    return result

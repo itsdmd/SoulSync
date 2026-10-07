@@ -23098,6 +23098,9 @@ app.register_blueprint(_create_stats_blueprint())
 from api.quality_profiles import configure as _cfg_qp, create_blueprint as _bp_qp
 _cfg_qp(get_database=get_database, add_activity_item=add_activity_item)
 app.register_blueprint(_bp_qp())
+# fork (itsdmd/SoulSync): LLM settings, translations, artist rules. See FORK.md.
+from api.fork import create_blueprint as _bp_fork
+app.register_blueprint(_bp_fork())
 from api.auto_import import configure as _cfg_ai, create_blueprint as _bp_ai
 def _get_auto_import_worker():
     # the worker handle lives (and is rebound) in api.import_routes

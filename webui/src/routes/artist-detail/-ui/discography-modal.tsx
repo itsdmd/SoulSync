@@ -93,6 +93,7 @@ export function DiscographyModal({
     view: discogCardView(release, {}),
     visible: discogCardVisible(discogCardView(release, {}), release._type, filters),
   }));
+  const ownedCount = cards.filter((c) => c.view.statusClass === 'owned').length;
   const visibleChecked = cards.filter((c) => c.visible && checked.has(String(c.release.id)));
   // a profile that can't download sends these as requests
   const asksFirst = profileAsksFirst();
@@ -213,6 +214,17 @@ export function DiscographyModal({
                     {label}
                   </button>
                 ))}
+                {/* fork: filter out releases already complete in the library */}
+                <button
+                  className={`discog-filter${filters.hideOwned ? ' active' : ''}`}
+                  type="button"
+                  id="discog-filter-hide-owned"
+                  title="Hide releases you already have in full"
+                  disabled={ownedCount === 0}
+                  onClick={() => toggleFilter('hideOwned')}
+                >
+                  Hide owned{ownedCount > 0 ? ` (${ownedCount})` : ''}
+                </button>
               </div>
               <div className="discog-select-actions">
                 <button className="discog-select-btn" type="button" onClick={() => selectAll(true)}>

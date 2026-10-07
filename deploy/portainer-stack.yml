@@ -1,0 +1,71 @@
+# Portainer stack for the itsdmd/SoulSync fork.
+#
+# Mirrors the stack that ran boulderbadgedad/soulsync: same ports, mounts and
+# named volumes, so replacing the old stack's compose with this one keeps the
+# existing config and database. Keep the stack name `soulsync`.
+#
+# Updating: the image is rebuilt whenever the `custom` branch changes
+# (including automatic upstream merges). In Portainer use
+# "Pull and redeploy" (or "Re-pull image" on Update the stack).
+#
+# The ghcr.io package is private until you make it public (GitHub → Packages →
+# soulsync → Package settings), or add ghcr.io as a registry in Portainer with a
+# token that has read:packages.
+
+services:
+  soulsync:
+    image: ghcr.io/itsdmd/soulsync:latest
+    container_name: soulsync-webui
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
+      - PYTHONPATH=/app
+      - SOULSYNC_CONFIG_PATH=/app/config/config.json
+      - TZ=Asia/Ho_Chi_Minh
+      - SOULSYNC_SPOTIFY_CALLBACK_PORT=8890
+      - SOULSYNC_TIDAL_CALLBACK_PORT=8889
+      # Fork: Ollama is reached over the shared `ollama-net` network. This host's
+      # firewall drops container -> host-port traffic, so host.docker.internal:11434
+      # does not work here. This is only the default; LLM & Tagging -> Server URL
+      # in the app overrides it.
+      - OLLAMA_URL=http://ollama:11434
+    ports:
+      - "8008:8008"
+      - "8889:8889"
+      - "8890:8890"
+    volumes:
+      - soulsync_config:/app/config
+      - soulsync_log:/app/logs
+      - soulsync_database:/app/data
+      - /cold/Music/Downloads:/app/downloads
+      - /hot/Music:/app/Transfer
+      - /hot/Torrent/downloads/Music:/hot/Torrent/downloads/Music
+    networks:
+      - default
+      - ollama-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  soulsync_config:
+    external: true
+  soulsync_log:
+    external: true
+  soulsync_database:
+    external: true
+
+# `ollama-net` already exists and the running `ollama` container is attached to
+# it. To keep that across a recreate of Ollama, add to Ollama's own stack:
+#     services: { ollama: { networks: [default, ollama-net] } }
+#     networks: { ollama-net: { external: true } }
+networks:
+  ollama-net:
+    external: true

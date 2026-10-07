@@ -107,6 +107,25 @@ export interface DiscogCardView {
   isFeatured: boolean;
 }
 
+/**
+ * fork: ownership as the artist page resolved it (`owned` + `track_completion`
+ * from the library completion stream), in the completion cache's vocabulary.
+ * A release still being checked, or never checked, is 'unknown'.
+ */
+export function releaseOwnershipStatus(release: DiscogRelease): string {
+  const raw = release as unknown as Record<string, unknown>;
+  if (raw.owned !== true) return 'unknown';
+  const completion = raw.track_completion;
+  if (completion && typeof completion === 'object') {
+    const tc = completion as { owned_tracks?: number; total_tracks?: number; percentage?: number };
+    const owned = tc.owned_tracks || 0;
+    const total = tc.total_tracks || 0;
+    if (total > 0 && owned < total) return 'partial';
+    if (typeof tc.percentage === 'number' && tc.percentage < 100) return 'partial';
+  }
+  return 'completed';
+}
+
 /** Per-card derivation (758-785): completion status + #877 content flags. */
 export function discogCardView(
   release: DiscogRelease,
@@ -118,7 +137,9 @@ export function discogCardView(
   const comp =
     completionData?.albums?.find((c) => c.id === release.id) ||
     completionData?.singles?.find((c) => c.id === release.id);
-  const status = comp?.status || 'unknown';
+  // fork: no completion cache entry -> read the ownership the artist page
+  // already merged into the release itself.
+  const status = comp?.status || releaseOwnershipStatus(release);
   const isOwned = status === 'completed';
   const isPartial = status === 'partial' || status === 'nearly_complete';
   const flags = classifyReleaseContent(release as never);
@@ -142,6 +163,8 @@ export interface DiscogFilters {
   live: boolean;
   compilations: boolean;
   featured: boolean;
+  /** fork: hide releases already complete in the library. */
+  hideOwned?: boolean;
 }
 
 export const DISCOG_DEFAULT_FILTERS: DiscogFilters = {
@@ -167,6 +190,7 @@ export function discogCardVisible(
   if (!filters.live && view.isLive) return false;
   if (!filters.compilations && view.isCompilation) return false;
   if (!filters.featured && view.isFeatured) return false;
+  if (filters.hideOwned && view.statusClass === 'owned') return false;
   return true;
 }
 

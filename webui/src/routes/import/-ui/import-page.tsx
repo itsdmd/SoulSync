@@ -14,6 +14,7 @@ import { getQueueProgressPercent, getQueueStatusText } from '../-import.helpers'
 import { useImportQueueWorkflow } from '../-import.store';
 import styles from './import-page.module.css';
 import { fallbackImage, GearIcon, RefreshIcon, useInboxRefresh } from './import-shared';
+import { RenameOnlyToggle } from './rename-only-toggle';
 import { SettingsDrawer } from './settings-drawer';
 
 /**
@@ -37,6 +38,7 @@ export function ImportPage() {
           subtitle="What is in your import folder, and what to do about it"
           actions={
             <>
+              <RenameOnlyToggle />
               <Button
                 variant="secondary"
                 title="Re-read the import folder"

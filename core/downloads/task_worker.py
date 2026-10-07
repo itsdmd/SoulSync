@@ -516,6 +516,9 @@ def download_track_worker(task_id: str, batch_id: Optional[str], deps: TaskWorke
                 seen.add(query.lower())
 
         search_queries = unique_queries
+        # fork: LLM-suggested variants, appended after upstream's own queries
+        from core.fork import hooks as _fork_hooks
+        search_queries = _fork_hooks.augment_search_queries(track, search_queries)
         # Where we're about to look, for the live status payload (#1156). The
         # chain label is what the orchestrator will actually walk; the hybrid
         # fallback loop below overwrites it with the specific source it tries.

@@ -1,0 +1,54 @@
+name: "Fork: build image"
+
+# Publishes ghcr.io/<owner>/soulsync from the fork branch. The Portainer
+# stack (deploy/portainer-stack.yml) pulls :latest.
+
+on:
+  push:
+    branches:
+      - custom
+    paths-ignore:
+      - '**.md'
+      - 'tests/**'
+      - 'deploy/**'
+  workflow_dispatch:
+
+concurrency:
+  group: fork-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    if: github.repository != 'Nezreka/SoulSync'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set lowercase owner
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          pull: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.OWNER }}/soulsync:latest
+            ghcr.io/${{ env.OWNER }}/soulsync:${{ github.sha }}
