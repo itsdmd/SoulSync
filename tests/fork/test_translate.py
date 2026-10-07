@@ -211,3 +211,20 @@ def test_every_request_carries_the_same_context_size_and_an_output_cap(fork_env,
     assert [body["options"]["num_ctx"] for body, _t in sent] == [8192, 8192]     # a caller cannot change it
     assert [body["options"]["num_predict"] for body, _t in sent] == [1024, 6000]
     assert sent[0][1] == 300.0
+
+
+def test_term_list_is_parsed_once_not_on_every_name(fork_env):
+    import time
+
+    from core.fork import cjk
+
+    cjk._terms_cache.clear()
+    started = time.time()
+    for n in range(20000):
+        split_name(f"歌曲{n} (Original Soundtrack)")
+    assert time.time() - started < 4
+    assert len(cjk._terms_cache) == 1
+    # and an edited list still takes effect immediately
+    fork_env.set("fork.translate.keep_terms", "Drama CD")
+    assert split_name("夜曲 (Drama CD)") == ("夜曲", "", "(Drama CD)")
+    assert split_name("夜曲 (OST)") == ("夜曲", "OST", "")

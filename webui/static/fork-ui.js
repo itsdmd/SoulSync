@@ -61,10 +61,11 @@
             try {
                 return await fetch(url, Object.assign({}, options, { signal: new AbortController().signal }));
             } catch (err) {
+                // Only an INSTANT failure is the lost-connection case. A request
+                // that ran for a while and then died is not re-sent on its own:
+                // repeating slow work behind the user's back only piles it up.
                 const instant = Date.now() - started < 1500;
-                // a read can always be repeated; a write only when it failed
-                // before the server could have started on it
-                if (attempt >= 2 || !(repeatable || instant)) throw err;
+                if (attempt >= 2 || !instant || (!repeatable && attempt >= 1)) throw err;
                 await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
             }
         }

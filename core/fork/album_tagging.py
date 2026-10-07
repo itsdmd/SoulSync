@@ -378,30 +378,64 @@ def _stem_title(rel: str) -> str:
     return _LEADING_NUMBER_RE.sub("", stem).strip() or stem
 
 
-def _title_score(file_titles: List[str], track_titles: List[str]) -> float:
+def name_keys(name: Any) -> Dict[str, Any]:
+    """Comparison keys for one name, computed ONCE per file / track so the
+    file-by-track loop below does no parsing or database work:
+    the whole name, the bare name inside any translation ("Nocturne (夜曲)"
+    -> 夜曲), its decoration ("(Live)") and the translation it carries."""
+    from core.fork.cjk import fold, split_name
+
+    text = " ".join(str(name or "").split())
+    if not text:
+        return {}
+    core, existing, suffix = split_name(text)
+    return {
+        "full": "".join(ch for ch in fold(text) if ch.isalnum()),
+        "core": "".join(ch for ch in fold(core) if ch.isalnum()),
+        "suffix": "".join(ch for ch in fold(suffix) if ch.isalnum()),
+        "existing": "".join(ch for ch in fold(existing) if ch.isalnum()),
+    }
+
+
+def _keys_score(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """1.0 for the same name (also across "<translation> (<original>)" forms),
+    0.9 for the same name with different decoration (studio vs live), else
+    plain text similarity."""
+    if not a or not b or not a["full"] or not b["full"]:
+        return 0.0
+    if a["full"] == b["full"]:
+        return 1.0
+    same_core = bool(a["core"]) and a["core"] == b["core"]
+    # one side is the translation the other carries: "Nocturne" vs "Nocturne (夜曲)"
+    carried = (a["existing"] and a["existing"] in (b["full"], b["core"])) or \
+              (b["existing"] and b["existing"] in (a["full"], a["core"]))
+    if same_core or carried:
+        return 1.0 if a["suffix"] == b["suffix"] else 0.9
+    return SequenceMatcher(None, a["full"], b["full"]).ratio()
+
+
+def _title_score(file_keys: List[Dict[str, Any]], track_keys: List[Dict[str, Any]]) -> float:
     best = 0.0
-    for candidate in file_titles:
-        if not candidate:
-            continue
-        for wanted in track_titles:
-            if not wanted:
-                continue
-            if ownership.names_equivalent("title", wanted, candidate) or \
-                    ownership.names_equivalent("title", candidate, wanted):
+    for a in file_keys:
+        for b in track_keys:
+            value = _keys_score(a, b)
+            if value >= 1.0:
                 return 1.0
-            a, b = _norm(candidate), _norm(wanted)
-            if a and b:
-                best = max(best, SequenceMatcher(None, a, b).ratio())
+            best = max(best, value)
     return best
 
 
-def score(file: Dict[str, Any], track: Dict[str, Any], proposal: Dict[str, Any]) -> Tuple[float, str]:
-    """``(score, reason)`` for pairing one file with one track."""
+def score(file: Dict[str, Any], track: Dict[str, Any], proposal: Dict[str, Any],
+          file_keys: Optional[List[Dict[str, Any]]] = None,
+          track_keys: Optional[List[Dict[str, Any]]] = None) -> Tuple[float, str]:
+    """``(score, reason)`` for pairing one file with one track. The key lists
+    are passed in by :func:`match_files`; computed here when called alone."""
     current = file["current"]
-    title = _title_score(
-        [current.get("title", ""), _stem_title(file["rel"])],
-        [proposal["source"]["title"], proposal["proposed"]["title"]],
-    )
+    if file_keys is None:
+        file_keys = [name_keys(current.get("title", "")), name_keys(_stem_title(file["rel"]))]
+    if track_keys is None:
+        track_keys = [name_keys(proposal["source"]["title"]), name_keys(proposal["proposed"]["title"])]
+    title = _title_score(file_keys, track_keys)
     position = bool(current.get("track_number")) \
         and current["track_number"] == proposal["source"]["track_number"] \
         and current.get("disc_number", 1) == proposal["source"]["disc_number"]
@@ -410,7 +444,9 @@ def score(file: Dict[str, Any], track: Dict[str, Any], proposal: Dict[str, Any])
     if have and want:
         diff = abs(have - want) / 1000.0
         duration = 0.15 if diff <= 3 else (0.0 if diff <= 10 else (-0.1 if diff <= 30 else -0.3))
-    total = title * 0.6 + (0.25 if position else 0.0) + duration
+    # the very same name outranks a merely similar name on the right track
+    # number ("Song 1" must not lose to "Song 10" because the numbering is off)
+    total = title * 0.6 + (0.3 if title >= 0.999 else 0.0) + (0.25 if position else 0.0) + duration
     if title >= 0.999:
         reason = "title"
     elif title >= 0.75:
@@ -425,10 +461,12 @@ def score(file: Dict[str, Any], track: Dict[str, Any], proposal: Dict[str, Any])
 def match_files(files: List[Dict[str, Any]], tracks: List[Dict[str, Any]],
                 props: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
     """Best one-to-one pairing: ``{file index: {"track", "score", "reason"}}``."""
+    file_keys = [[name_keys(f["current"].get("title", "")), name_keys(_stem_title(f["rel"]))] for f in files]
+    track_keys = [[name_keys(p["source"]["title"]), name_keys(p["proposed"]["title"])] for p in props]
     scored = []
     for f_idx, file in enumerate(files):
         for t_idx, track in enumerate(tracks):
-            value, reason = score(file, track, props[t_idx])
+            value, reason = score(file, track, props[t_idx], file_keys[f_idx], track_keys[t_idx])
             if value >= 0.25:
                 scored.append((value, f_idx, t_idx, reason))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))

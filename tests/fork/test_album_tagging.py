@@ -360,3 +360,43 @@ def test_background_translation_reports_a_model_that_will_not_load(library, llm,
             break
         time.sleep(0.02)
     assert "could not be loaded" in status["error"] and llm.calls == []
+
+
+# ── matching must stay fast on a big album ──────────────────────────────
+
+def test_preview_of_a_hundred_track_album_is_quick_and_touches_the_database_little(library, monkeypatch):
+    import time
+
+    folder = library / "Big"
+    count = 100
+    tracks = []
+    for n in range(1, count + 1):
+        original = f"歌曲第{n}號"
+        # half the files carry an old translation, half only the original; numbering is off by one
+        title = f"Old Song {n} ({original})" if n % 2 else original
+        _flac(str(folder / f"{n:03d} - {title}.flac"), title=title, tracknumber=n + 1)
+        tracks.append({"id": f"t{n}", "name": original, "artists": [{"name": "周杰倫"}],
+                       "track_number": n, "disc_number": 1})
+    lookups = []
+    real = store.get_translation
+    monkeypatch.setattr(store, "get_translation", lambda kind, original: lookups.append(original) or real(kind, original))
+    started = time.time()
+    data = album_tagging.preview(str(folder), ALBUM, ARTIST, tracks)
+    elapsed = time.time() - started
+    assert elapsed < 5, f"preview took {elapsed:.1f}s"
+    # every file found its own track by name, despite the wrong numbers
+    wrong = [r["rel"] for r in data["rows"] if r["track"] is None or tracks[r["track"]]["name"] not in r["rel"]]
+    assert wrong == []
+    # a few lookups per track, not one per file-track pair (that was 10,000+)
+    assert len(lookups) < count * 8
+
+
+def test_name_keys_recognise_the_same_name_across_forms():
+    keys, score_ = album_tagging.name_keys, album_tagging._keys_score
+    assert score_(keys("夜曲"), keys("Nocturne (夜曲)")) == 1.0          # original inside a translated name
+    assert score_(keys("Nocturne"), keys("Nocturne (夜曲)")) == 1.0      # the translation it carries
+    assert score_(keys("相變臨界"), keys("Critical (相变临界)")) == 1.0          # other Chinese script
+    assert score_(keys("夜曲 (Live)"), keys("Nocturne (夜曲)")) == 0.9   # same song, different recording
+    assert score_(keys("夜曲 (Live)"), keys("Nocturne (夜曲) (Live)")) == 1.0
+    assert score_(keys("夜曲"), keys("髮如雪")) < 0.5
+    assert score_(keys(""), keys("夜曲")) == 0.0

@@ -110,9 +110,23 @@ def _config_manager():
     return config_manager
 
 
+_defaults_cache: Dict[str, Any] = {}
+
+
+def _cached_defaults() -> Dict[str, Any]:
+    """The defaults tree, built once per Ollama URL (its only varying part).
+    ``get`` is called in tight loops; callers must not mutate the result."""
+    url = _default_ollama_url()
+    cached = _defaults_cache.get(url)
+    if cached is None:
+        _defaults_cache.clear()
+        cached = _defaults_cache[url] = defaults()
+    return cached
+
+
 def get(key: str, default: Any = None) -> Any:
     """``get('translate.template')`` -> stored value, else the fork default."""
-    node: Any = defaults()
+    node: Any = _cached_defaults()
     for part in key.split("."):
         if isinstance(node, dict) and part in node:
             node = node[part]

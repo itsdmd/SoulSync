@@ -66,8 +66,7 @@ _TRAILING_DASH_RE = re.compile(r"^(?P<head>.*\S)\s+(?P<group>[-–—]\s+(?P<inn
 _terms_cache: dict = {}
 
 
-def keep_terms(raw: object = None) -> list:
-    """The configured terms (comma- or line-separated), or the defaults."""
+def _raw_terms(raw: object = None) -> str:
     if raw is None:
         try:
             from core.fork import config
@@ -75,30 +74,44 @@ def keep_terms(raw: object = None) -> list:
             raw = config.get("translate.keep_terms")
         except Exception:
             raw = None
-    if raw is None:
-        raw = DEFAULT_KEEP_TERMS
-    out = []
-    for term in re.split(r"[,\n]+", str(raw)):
+    return DEFAULT_KEEP_TERMS if raw is None else str(raw)
+
+
+def _parse_terms(text: str) -> list:
+    out, seen = [], set()
+    for term in re.split(r"[,\n]+", text):
         term = " ".join(term.split())
-        if term and term.casefold() not in {t.casefold() for t in out}:
+        if term and term.casefold() not in seen:
+            seen.add(term.casefold())
             out.append(term)
     return out
 
 
-def _terms_regex(raw: object = None) -> "re.Pattern[str]":
-    terms = keep_terms(raw)
-    key = "\x1f".join(terms)
-    cached = _terms_cache.get(key)
+def keep_terms(raw: object = None) -> list:
+    """The configured terms (comma- or line-separated), or the defaults."""
+    return list(_compiled_terms(_raw_terms(raw))[0])
+
+
+def _compiled_terms(text: str) -> tuple:
+    """``(terms, regex)`` for a term list, parsed and compiled once per
+    distinct list — this sits under every name split, which runs thousands of
+    times when a whole album or library is processed."""
+    cached = _terms_cache.get(text)
     if cached is None:
+        terms = _parse_terms(text)
         # whole words/phrases only ("EP" must not match inside "Deep"); spaces
         # inside a phrase may be any whitespace or a hyphen ("Re-recorded")
         parts = [r"[\s\-]*".join(re.escape(word) for word in re.split(r"[\s\-]+", term) if word)
                  for term in sorted(terms, key=len, reverse=True)]
-        cached = re.compile(r"(?i)(?<![a-z0-9])(?:" + "|".join(parts + [r"\d{4}"]) + r")(?![a-z0-9])")
+        regex = re.compile(r"(?i)(?<![a-z0-9])(?:" + "|".join(parts + [r"\d{4}"]) + r")(?![a-z0-9])")
         if len(_terms_cache) > 20:
             _terms_cache.clear()
-        _terms_cache[key] = cached
+        cached = _terms_cache[text] = (terms, regex)
     return cached
+
+
+def _terms_regex(raw: object = None) -> "re.Pattern[str]":
+    return _compiled_terms(_raw_terms(raw))[1]
 
 
 def is_decoration(text: str) -> bool:
