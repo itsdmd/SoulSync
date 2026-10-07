@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import threading
 import unicodedata
 from collections import Counter
 from difflib import SequenceMatcher
@@ -242,7 +243,11 @@ def proposals(album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[s
         proposed = dict(source)
         if apply_rules:
             try:
-                proposed.update({k: v for k, v in tags.transform_values(source).items() if isinstance(v, str)})
+                # saved translations only: the preview must never wait for the
+                # model. Names without one are reported by untranslated() and
+                # translated in the background.
+                proposed.update({k: v for k, v in tags.transform_values(source, allow_llm=False).items()
+                                 if isinstance(v, str)})
             except Exception as exc:
                 logger.warning("Could not apply rules to %r: %s", source.get("title"), exc)
         if semicolons:
@@ -437,6 +442,95 @@ def match_files(files: List[Dict[str, Any]], tracks: List[Dict[str, Any]],
     return assigned
 
 
+def untranslated(props: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Album and title names in these proposals that have no saved
+    translation yet: ``{"kind", "original", "artist", "album"}``."""
+    from core.fork import store, translate
+    from core.fork.cjk import contains_cjk, split_name
+
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for prop in props:
+        source = prop["source"]
+        album_core = split_name(source.get("album") or "")[0]
+        for kind, value in (("album", source.get("album")), ("title", source.get("title"))):
+            if not value or not contains_cjk(value) or not translate.enabled(kind):
+                continue
+            core, existing, _suffix = split_name(value)
+            if existing or not contains_cjk(core) or (kind, core) in seen:
+                continue
+            seen.add((kind, core))
+            if store.find_translation(kind, core):
+                continue
+            out.append({"kind": kind, "original": core, "artist": source.get("artist") or "",
+                        "album": "" if kind == "album" else album_core})
+    return out
+
+
+# ── background translation for the review dialog ────────────────────────
+
+_translate_lock = threading.Lock()
+_translate_job: Dict[str, Any] = {"id": 0, "running": False}
+
+
+def translate_status() -> Dict[str, Any]:
+    with _translate_lock:
+        return dict(_translate_job)
+
+
+def start_translate(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Translate ``items`` (as returned by :func:`untranslated`) in the
+    background: load the model first, then several names per request."""
+    from core.fork import ollama, translate
+
+    clean = [{"kind": str(i.get("kind") or ""), "original": str(i.get("original") or "").strip(),
+              "artist": str(i.get("artist") or ""), "album": str(i.get("album") or "")}
+             for i in items if isinstance(i, dict)]
+    clean = [i for i in clean if i["kind"] in ("album", "title") and i["original"]][:500]
+    with _translate_lock:
+        if _translate_job.get("running"):
+            return dict(_translate_job)        # one at a time; the caller polls the running one
+        job_id = int(_translate_job.get("id") or 0) + 1
+        _translate_job.clear()
+        _translate_job.update({"id": job_id, "running": True, "phase": "loading", "done": 0,
+                               "total": len(clean), "translated": 0, "error": None})
+
+    def update(**values: Any) -> None:
+        with _translate_lock:
+            if _translate_job.get("id") == job_id:
+                _translate_job.update(values)
+
+    def work() -> None:
+        error = None
+        translated = 0
+        try:
+            ollama.reset_cooldown()
+            if not ollama.warm("names"):
+                raise RuntimeError("The model could not be loaded. Is Ollama running?")
+            update(phase="translating")
+            done = 0
+            for kind in ("album", "title"):
+                batch = [i for i in clean if i["kind"] == kind]
+                if not batch:
+                    continue
+                base = done
+
+                def progress(finished: int, _pending: int, _base: int = base) -> None:
+                    update(done=_base + finished)
+
+                result = translate.translate_batch(kind, batch, 10, None, progress)
+                translated += sum(1 for i in batch if i["original"] in result)
+                done += len(batch)
+                update(done=done)
+        except Exception as exc:  # noqa: BLE001 - shown to the user through the status
+            logger.warning("background translation failed: %s", exc)
+            error = str(exc)
+        update(running=False, phase="done", translated=translated, error=error)
+
+    threading.Thread(target=work, name="fork-album-translate", daemon=True).start()
+    return translate_status()
+
+
 def preview(folder: str, album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[str, Any]],
             apply_rules: bool = True, semicolons: bool = True) -> Dict[str, Any]:
     real = safe_dir(folder)
@@ -462,6 +556,7 @@ def preview(folder: str, album: Dict[str, Any], artist: Dict[str, Any], tracks: 
         "unmatched_tracks": [i for i in range(len(tracks)) if i not in matched],
         "total_tracks": len(tracks),
         "truncated": len(files) >= _MAX_FILES,
+        "untranslated": untranslated(props) if apply_rules else [],
         "artist_mode": {"split_tags": artist_format.split_tags_enabled(),
                         "separator": artist_format.separator().strip() or artist_format.separator()},
     }

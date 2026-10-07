@@ -369,6 +369,24 @@ def album_tag_preview():
     return jsonify(success=True, **data)
 
 
+@bp.route("/api/fork/album/translate", methods=["POST"])
+@admin_only
+def album_translate_start():
+    """Translate names in the background; the review dialog polls the status."""
+    from core.fork import album_tagging
+
+    items = _body().get("items")
+    return jsonify(success=True, job=album_tagging.start_translate(items if isinstance(items, list) else []))
+
+
+@bp.route("/api/fork/album/translate", methods=["GET"])
+@admin_only
+def album_translate_status():
+    from core.fork import album_tagging
+
+    return jsonify(success=True, job=album_tagging.translate_status())
+
+
 @bp.route("/api/fork/album/tag-apply", methods=["POST"])
 @admin_only
 def album_tag_apply():

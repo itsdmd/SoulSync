@@ -165,7 +165,8 @@
                 }),
                 el('button', { class: 'fork-btn', text: 'Check', onclick: loadModels }),
             ]),
-            textRow('Request timeout (seconds)', 'ollama.timeout', 'Loading a model cold can take over a minute.', { type: 'number', min: '10' }),
+            textRow('Request timeout (seconds)', 'ollama.timeout', 'A request made while the model is still loading always gets at least 8 minutes.', { type: 'number', min: '10' }),
+            textRow('Context size', 'ollama.num_ctx', 'Same for every request; changing it makes Ollama reload the model.', { type: 'number', min: '2048', step: '1024' }),
         ]);
 
         const models = el('div', { class: 'fork-section' }, [el('h3', { text: 'Model per task' }), modelList]);

@@ -61,6 +61,58 @@ def list_models(url: Optional[str] = None, timeout: float = 10) -> List[str]:
     return sorted(str(m.get("name")) for m in models if m.get("name"))
 
 
+# A cold model has to be loaded before it answers, and the first answer after
+# a load is slow too: together well over two minutes for a 9B model here,
+# against under a second once warm. Calls made while the model is not loaded
+# get at least this long, whatever the configured timeout says.
+COLD_TIMEOUT_SECONDS = 480
+DEFAULT_NUM_CTX = 8192
+
+
+def context_size() -> int:
+    """One context size for every call. Ollama reloads the model whenever a
+    request asks for a different one, so mixing sizes costs a reload each time."""
+    try:
+        return max(2048, int(float(config.get("ollama.num_ctx") or DEFAULT_NUM_CTX)))
+    except (TypeError, ValueError):
+        return DEFAULT_NUM_CTX
+
+
+def is_loaded(model: str, url: Optional[str] = None) -> Optional[bool]:
+    """Whether ``model`` is in memory right now; None when Ollama did not say."""
+    try:
+        resp = requests.get(f"{(url or base_url()).rstrip('/')}/api/ps", timeout=4)
+        resp.raise_for_status()
+        loaded = [str(m.get("name") or m.get("model") or "") for m in resp.json().get("models") or []]
+    except (requests.RequestException, ValueError):
+        return None
+    return any(name == model or name.split(":")[0] == model for name in loaded)
+
+
+def request_timeout(model: str) -> float:
+    configured = float(config.get("ollama.timeout") or 300)
+    return configured if is_loaded(model) else max(configured, COLD_TIMEOUT_SECONDS)
+
+
+def warm(task: str, model: Optional[str] = None) -> bool:
+    """Load the task's model into memory without generating anything, and
+    wait for it. Cheap when it is already loaded. Returns whether it is ready."""
+    model = model or config.model_for(task)
+    if is_loaded(model):
+        return True
+    body = {"model": model, "keep_alive": config.get("ollama.keep_alive") or "10m",
+            "options": {"num_ctx": context_size()}}
+    try:
+        with _call_lock:
+            resp = requests.post(f"{base_url()}/api/generate", json=body, timeout=COLD_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Could not load %s: %s", model, exc)
+        return False
+    reset_cooldown()
+    return True
+
+
 def chat_json(
     task: str,
     system: str,
@@ -70,6 +122,7 @@ def chat_json(
     model: Optional[str] = None,
     temperature: float = 0.2,
     num_ctx: Optional[int] = None,
+    max_tokens: int = 1024,
 ) -> Dict[str, Any]:
     """Send one stateless request and return the parsed JSON object.
 
@@ -85,16 +138,17 @@ def chat_json(
         "think": False,
         "format": schema,
         "keep_alive": config.get("ollama.keep_alive") or "10m",
-        "options": {"temperature": temperature},
+        # num_predict: constrained JSON output can run away into endless
+        # whitespace; a cap ends that in seconds instead of at the timeout.
+        "options": {"temperature": temperature, "num_ctx": context_size(), "num_predict": int(max_tokens)},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
         ],
     }
-    if num_ctx:
-        body["options"]["num_ctx"] = int(num_ctx)
+    # ``num_ctx`` from callers is ignored on purpose: see context_size().
     url = f"{base_url()}/api/chat"
-    timeout = float(config.get("ollama.timeout") or 180)
+    timeout = request_timeout(body["model"])
 
     with _call_lock:
         try:

@@ -70,7 +70,7 @@ def translate_lines(lines: List[str], title: str = "", artist: str = "") -> Dict
             payload["artist"] = artist
         try:
             data = ollama.chat_json("lyrics", _system_prompt(language), payload, _SCHEMA,
-                                    temperature=0.3, num_ctx=8192)
+                                    temperature=0.3, max_tokens=6000)
         except ollama.OllamaError as exc:
             logger.warning("Lyrics translation failed: %s", exc)
             return {}  # all or nothing: never write a half-translated file

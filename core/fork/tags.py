@@ -105,8 +105,13 @@ def _write_original(audio: Any, kind: str, field: str, value: str) -> None:
         audio[f"----:com.apple.iTunes:{name}"] = [value.encode("utf-8")]
 
 
-def transform_values(current: Dict[str, Any], allow_network: bool = True) -> Dict[str, Any]:
-    """New values for the name fields in ``current`` (only the changed ones)."""
+def transform_values(current: Dict[str, Any], allow_network: bool = True,
+                     allow_llm: Optional[bool] = None) -> Dict[str, Any]:
+    """New values for the name fields in ``current`` (only the changed ones).
+    ``allow_llm=False`` uses saved translations only, never the model, while
+    artist lookups still run."""
+    if allow_llm is None:
+        allow_llm = allow_network
     changed: Dict[str, Any] = {}
     for field in ("artist", "albumartist"):
         if current.get(field):
@@ -121,11 +126,11 @@ def transform_values(current: Dict[str, Any], allow_network: bool = True) -> Dic
     hint = {"artist": changed.get("artist") or current.get("artist") or "",
             "album": current.get("album") or ""}
     if current.get("album") and translate.enabled("album"):
-        new = translate.translate_name("album", current["album"], {"artist": hint["artist"]}, allow_network)
+        new = translate.translate_name("album", current["album"], {"artist": hint["artist"]}, allow_llm)
         if new and new != current["album"]:
             changed["album"] = new
     if current.get("title") and translate.enabled("title"):
-        new = translate.translate_name("title", current["title"], hint, allow_network)
+        new = translate.translate_name("title", current["title"], hint, allow_llm)
         if new and new != current["title"]:
             changed["title"] = new
     return changed

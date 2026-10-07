@@ -37,6 +37,8 @@ def defaults() -> Dict[str, Any]:
             "url": _default_ollama_url(),
             "timeout": 300,
             "keep_alive": "10m",
+            # one context size for every request (a change makes Ollama reload the model)
+            "num_ctx": 8192,
         },
         "models": {task: DEFAULT_MODEL for task in MODEL_TASKS},
         "search_terms": {

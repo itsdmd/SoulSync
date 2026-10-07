@@ -275,14 +275,18 @@
     function openTagger(state) {
         const process = getProcess(state.id);
         if (!process || !state.folder) return;
-        const opts = { applyRules: true, semicolons: true, rename: false };
+        const opts = { applyRules: true, translate: true, semicolons: true, rename: false };
+        let closed = false;
+        let translateRun = 0;      // bumps whenever a newer preview/translation supersedes the running one
+        let albumEdited = false;
         let data = null;
         let rows = [];   // {rel, current, track, include, tags:{}, reason}
 
         const body = el('div', { class: 'fork-album-tagbody' });
         const status = el('span', { class: 'fork-album-status' });
         const applyBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Apply tags', disabled: true });
-        const albumInput = el('input', { class: 'fork-album-input', 'aria-label': 'Album' });
+        const albumInput = el('input', { class: 'fork-album-input', 'aria-label': 'Album', oninput: () => { albumEdited = true; } });
+        const translateNote = el('div', { class: 'fork-album-translating' });
         const artistMode = el('span', { class: 'fork-album-mode' });
         const yearInput = el('input', { class: 'fork-album-input fork-album-year', 'aria-label': 'Year' });
 
@@ -302,18 +306,22 @@
                 el('label', {}, ['Year', yearInput]),
             ]),
             el('div', { class: 'fork-album-options' }, [
-                check('Use my artist rules and translations', 'applyRules',
+                check('Use my artist rules and saved translations', 'applyRules',
                     'Off: propose exactly what the metadata source reports.', () => load()),
+                check('Translate new names with the model', 'translate',
+                    'Names with no saved translation are translated in the background while you review. Off: skip that step — untranslated names stay as they are and nothing waits for the model.',
+                    () => { if (opts.translate) load(); else { translateRun++; translateNote.textContent = ''; } }),
                 check('Separate multiple artists', 'semicolons',
                     'Splits "A, B", "A & B" or "A feat. B" in Artist and Album artist into individual artists. A name MusicBrainz or your rules know as one artist is left whole. How they are stored is set in LLM & Tagging → Artists.', () => load()),
                 artistMode,
                 check('Also rename/move files to my path format', 'rename',
                     'Off (default): only tags change; files stay where they are.'),
             ]),
+            translateNote,
             body,
             el('div', { class: 'fork-album-actions' }, [
                 status,
-                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => { closed = true; root.remove(); } }),
                 applyBtn,
             ]),
         ]);
@@ -339,6 +347,7 @@
                     row.track = e.target.value === '' ? null : Number(e.target.value);
                     const proposed = row.track == null ? null : proposedFor(row.track);
                     row.tags = proposed || { ...row.current };
+                    row.edited = {};
                     row.include = row.track != null;
                     include.checked = row.include;
                     tr.className = row.include ? '' : 'fork-album-off';
@@ -365,7 +374,7 @@
                 const numeric = key.endsWith('_number');
                 inputs[key] = el('input', {
                     class: 'fork-album-input' + (numeric ? ' fork-album-num' : ''), 'aria-label': label,
-                    oninput: (e) => { row.tags[key] = e.target.value; },
+                    oninput: (e) => { row.tags[key] = e.target.value; row.edited[key] = true; },
                 });
                 const was = row.current[key];
                 tr.append(el('td', {}, [
@@ -393,9 +402,9 @@
         async function load() {
             applyBtn.disabled = true;
             status.textContent = '';
-            body.replaceChildren(el('div', { class: 'fork-album-note', text: opts.applyRules
-                ? 'Reading files and preparing tags (translating new names can take a moment)…'
-                : 'Reading files…' }));
+            translateRun++;
+            translateNote.textContent = '';
+            body.replaceChildren(el('div', { class: 'fork-album-note', text: 'Reading files and preparing tags…' }));
             try {
                 data = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules, semicolons: opts.semicolons }));
             } catch (err) {
@@ -411,10 +420,65 @@
             yearInput.value = first.year || '';
             rows = data.rows.map((r) => ({
                 rel: r.rel, current: r.current, track: r.track, reason: r.reason,
-                include: r.track != null,
+                include: r.track != null, edited: {},
                 tags: r.track != null ? proposedFor(r.track) : { ...r.current },
             }));
+            albumEdited = false;
             render();
+            translateMissing();
+        }
+
+        // Names without a saved translation are translated in the background;
+        // the table stays usable meanwhile and picks the results up when ready.
+        async function translateMissing() {
+            const run = ++translateRun;
+            translateNote.textContent = '';
+            const pending = (data && data.untranslated) || [];
+            if (!opts.applyRules || !opts.translate || !pending.length) return;
+            const live = () => !closed && run === translateRun;
+            translateNote.textContent = `Translating ${pending.length} name${pending.length === 1 ? '' : 's'} with the model — you can keep reviewing…`;
+            let job;
+            try {
+                job = (await api('/translate', { items: pending })).job;
+                while (job.running) {
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    if (!live()) return;
+                    job = (await api(`/translate?t=${Date.now()}`)).job;
+                    translateNote.textContent = job.phase === 'loading'
+                        ? 'Loading the model (the first time can take a couple of minutes) — you can keep reviewing…'
+                        : `Translating names with the model: ${job.done} of ${job.total} — you can keep reviewing…`;
+                }
+            } catch (err) {
+                if (live()) translateNote.textContent = `Translation did not finish: ${err.message}. The names below are untranslated; you can edit them or apply as they are.`;
+                return;
+            }
+            if (!live()) return;
+            if (job.error) {
+                translateNote.textContent = `Translation did not finish: ${job.error} The names below are untranslated; you can edit them or apply as they are.`;
+                return;
+            }
+            // fetch the proposals again (saved translations only, so this is
+            // instant) and fill them in wherever nothing was typed by hand
+            let fresh;
+            try {
+                fresh = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules, semicolons: opts.semicolons }));
+            } catch (err) { translateNote.textContent = `Translated, but the table could not be refreshed: ${err.message}`; return; }
+            if (!live()) return;
+            data.tracks = fresh.tracks;
+            data.untranslated = fresh.untranslated;
+            for (const row of rows) {
+                if (row.track == null || !fresh.tracks[row.track]) continue;
+                const proposed = fresh.tracks[row.track].proposed;
+                for (const key of Object.keys(proposed)) {
+                    if (!row.edited[key]) row.tags[key] = proposed[key];
+                }
+            }
+            if (!albumEdited && fresh.tracks[0]) albumInput.value = fresh.tracks[0].proposed.album || albumInput.value;
+            render();
+            const left = (fresh.untranslated || []).length;
+            translateNote.textContent = left
+                ? `Translated ${job.translated} name${job.translated === 1 ? '' : 's'}; ${left} could not be translated and are left as they are.`
+                : `Translated ${job.translated} name${job.translated === 1 ? '' : 's'}.`;
         }
 
         applyBtn.addEventListener('click', async () => {

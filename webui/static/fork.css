@@ -434,3 +434,9 @@ select.fork-album-input option { background: #181818; }
     font-size: 0.76rem;
     color: rgba(255, 255, 255, 0.5);
 }
+
+.fork-album-translating {
+    font-size: 0.8rem;
+    color: rgb(var(--accent-light-rgb, var(--accent-rgb)));
+    min-height: 1.1em;
+}

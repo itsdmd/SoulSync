@@ -212,7 +212,7 @@ def translate_batch(kind: str, items: List[Dict[str, str]], batch_size: int = 10
             payload["items"].append(entry)  # type: ignore[union-attr]
         try:
             data = ollama.chat_json("names", _system_prompt(language), payload, _SCHEMA, temperature=0.1,
-                                    num_ctx=8192)
+                                    max_tokens=200 + 120 * len(chunk))
         except ollama.OllamaError as exc:
             logger.warning("Batch translation failed (%s names): %s", len(chunk), exc)
             if not ollama.available():

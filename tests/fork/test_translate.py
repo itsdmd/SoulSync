@@ -170,3 +170,44 @@ def test_traditional_and_simplified_spellings_share_one_translation(llm):
     assert translate.translate_name("album", "相变临界OST") == "Critical Phase Transition (相变临界) OST"
     assert len(llm.calls) == 1
     assert store.list_translations(kind="album")["total"] == 1
+
+
+# ── cold model handling ─────────────────────────────────────────────────
+
+def test_a_cold_model_gets_a_long_timeout_and_one_context_size(fork_env, monkeypatch):
+    from core.fork import ollama
+
+    fork_env.set("fork.ollama.timeout", 120)
+    monkeypatch.setattr(ollama, "is_loaded", lambda model, url=None: True)
+    assert ollama.request_timeout("qwen3.5:9b") == 120
+    monkeypatch.setattr(ollama, "is_loaded", lambda model, url=None: False)
+    assert ollama.request_timeout("qwen3.5:9b") == ollama.COLD_TIMEOUT_SECONDS
+    monkeypatch.setattr(ollama, "is_loaded", lambda model, url=None: None)   # Ollama did not say: assume cold
+    assert ollama.request_timeout("qwen3.5:9b") == ollama.COLD_TIMEOUT_SECONDS
+    assert ollama.context_size() == 8192
+    fork_env.set("fork.ollama.num_ctx", "4096")
+    assert ollama.context_size() == 4096
+
+
+def test_every_request_carries_the_same_context_size_and_an_output_cap(fork_env, monkeypatch):
+    from core.fork import ollama
+
+    sent = []
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"ok": true}'}}
+
+    monkeypatch.setattr(ollama, "is_loaded", lambda model, url=None: True)
+    monkeypatch.setattr(ollama.requests, "post", lambda url, json=None, timeout=None: sent.append((json, timeout)) or Resp())
+    ollama.chat_json("names", "s", {}, {"type": "object"})
+    ollama.chat_json("lyrics", "s", {}, {"type": "object"}, num_ctx=2048, max_tokens=6000)
+    assert [body["options"]["num_ctx"] for body, _t in sent] == [8192, 8192]     # a caller cannot change it
+    assert [body["options"]["num_predict"] for body, _t in sent] == [1024, 6000]
+    assert sent[0][1] == 300.0

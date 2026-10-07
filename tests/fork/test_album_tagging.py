@@ -303,3 +303,60 @@ def test_apply_stores_artists_per_the_strategy(library, fork_env):
     row["tags"]["artist"] = "Jay Chou; Lara"
     album_tagging.apply(str(folder), [row], ALBUM, ARTIST, TRACKS, separate_artists=False)
     assert FLAC(path)["artist"] == ["Jay Chou; Lara"]
+
+
+# ── the preview never waits for the model ───────────────────────────────
+
+def test_preview_uses_saved_translations_only_and_reports_the_rest(library, llm):
+    folder = library / "E"
+    _flac(str(folder / "01.flac"), title="夜曲", tracknumber=1)
+    tracks = TRACKS + [{"id": "t4", "name": "不存在的樂園", "artists": [{"name": "周杰倫"}], "track_number": 4},
+                       {"id": "t5", "name": "不存在的樂園 (Live)", "artists": [{"name": "周杰倫"}], "track_number": 5}]
+    data = album_tagging.preview(str(folder), ALBUM, ARTIST, tracks)
+    assert llm.calls == []                                             # no model call at all
+    assert data["tracks"][0]["proposed"]["title"] == "Nocturne (夜曲)"   # saved translation applied
+    assert data["tracks"][3]["proposed"]["title"] == "不存在的樂園"        # unknown: left as is…
+    assert data["untranslated"] == [{"kind": "title", "original": "不存在的樂園", "artist": "周杰倫",
+                                     "album": "十一月的蕭邦"}]            # …and reported once
+    # rules off: nothing to translate
+    assert album_tagging.preview(str(folder), ALBUM, ARTIST, tracks, apply_rules=False)["untranslated"] == []
+
+
+def test_background_translation_warms_the_model_then_batches(library, llm, monkeypatch):
+    import time
+
+    from core.fork import ollama
+
+    warmed = []
+    monkeypatch.setattr(ollama, "warm", lambda task, model=None: warmed.append(task) or True)
+    llm.replies = [{"translations": [{"id": 1, "translation": "The Nonexistent Paradise"},
+                                     {"id": 2, "translation": "Judgement Day"}]}]
+    job = album_tagging.start_translate([
+        {"kind": "title", "original": "不存在的樂園", "artist": "A"},
+        {"kind": "title", "original": "裁決日", "artist": "A"},
+        {"kind": "bogus", "original": "x"}, {"kind": "title", "original": " "}, "junk",
+    ])
+    assert job["running"] is True and job["total"] == 2
+    for _ in range(200):
+        status = album_tagging.translate_status()
+        if not status["running"]:
+            break
+        time.sleep(0.02)
+    assert status["error"] is None and status["translated"] == 2 and status["done"] == 2
+    assert warmed == ["names"] and len(llm.calls) == 1                 # one request for both names
+    assert store.get_translation("title", "裁決日")["translated"] == "Judgement Day"
+
+
+def test_background_translation_reports_a_model_that_will_not_load(library, llm, monkeypatch):
+    import time
+
+    from core.fork import ollama
+
+    monkeypatch.setattr(ollama, "warm", lambda task, model=None: False)
+    album_tagging.start_translate([{"kind": "title", "original": "裁決日"}])
+    for _ in range(200):
+        status = album_tagging.translate_status()
+        if not status["running"]:
+            break
+        time.sleep(0.02)
+    assert "could not be loaded" in status["error"] and llm.calls == []
