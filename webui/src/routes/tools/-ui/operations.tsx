@@ -47,6 +47,7 @@ import {
   repairJobMeta,
   repairSettingInput,
 } from '../-tools.core';
+import { isRepairSettingLocked, repairSettingLockReason } from '../-tools.fork';
 import { sparklinePoints } from '../-tools.groups';
 import {
   cadenceFromHours,
@@ -334,7 +335,11 @@ function JobSettings({
                 data-job={job.job_id}
                 data-key={key}
                 value={settingText(current)}
-                disabled={key === 'dry_run' && confirmPending}
+                disabled={
+                  (key === 'dry_run' && confirmPending) ||
+                  isRepairSettingLocked(job.job_id, key, values) // fork
+                }
+                title={repairSettingLockReason(job.job_id, key, values)}
                 onChange={(event) => {
                   const target = event.target;
                   void handleSettingChange(key, target.value, () => {

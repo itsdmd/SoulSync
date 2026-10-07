@@ -182,6 +182,34 @@
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
         ]);
 
+        // Artists: separate tags and a custom separator are mutually exclusive —
+        // the separator only exists when everything goes into one tag.
+        settings.artists = settings.artists || {};
+        const separatorSelect = el('select', {
+            class: 'fork-select', disabled: !!settings.artists.split_tags,
+            onchange: (e) => { settings.artists.separator = e.target.value; },
+        }, [['semicolon', 'Semicolon —  A; B'], ['comma', 'Comma —  A, B'], ['slash', 'Slash —  A / B'], ['ampersand', 'Ampersand —  A & B']]
+            .map(([value, text]) => el('option', { value, text, selected: (settings.artists.separator || 'semicolon') === value })));
+        const separatorHelp = el('span', { class: 'fork-help' });
+        const syncSeparator = () => {
+            separatorSelect.disabled = !!settings.artists.split_tags;
+            separatorHelp.textContent = settings.artists.split_tags ? 'Not used while artists are split into separate tags.' : '';
+        };
+        syncSeparator();
+        const artists = el('div', { class: 'fork-section' }, [
+            el('h3', { text: 'Multiple artists' }),
+            el('label', { class: 'fork-check' }, [
+                el('input', {
+                    type: 'checkbox', checked: !!settings.artists.split_tags,
+                    onchange: (e) => { settings.artists.split_tags = e.target.checked; syncSeparator(); },
+                }),
+                el('span', {}, ['Split artists into separate tags', el('small', {
+                    text: 'Writes one tag per artist (ARTIST=Artist A, ARTIST=Artist B) instead of one combined value. Applies to Artist and Album artist, on downloads, imports and auto-tagging.',
+                })]),
+            ]),
+            el('div', { class: 'fork-row' }, [el('label', { text: 'Separator in a combined tag' }), separatorSelect, separatorHelp]),
+        ]);
+
         const features = el('div', { class: 'fork-section' }, [el('h3', { text: 'Features' })]);
         for (const [path, label, help] of TOGGLES) {
             features.append(el('label', { class: 'fork-check' }, [
@@ -193,7 +221,7 @@
             ]));
         }
 
-        body.replaceChildren(connection, models, naming, features);
+        body.replaceChildren(connection, models, naming, artists, features);
         api('/models?url=' + encodeURIComponent(settings.ollama.url))
             .then((data) => modelList.replaceChildren(...data.models.map((m) => el('option', { value: m }))))
             .catch(() => { /* shown when the user presses Check */ });

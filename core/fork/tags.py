@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from core.fork import artist_names, config, translate
+from core.fork import artist_format, artist_names, config, translate
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.tags")
@@ -131,6 +131,29 @@ def transform_values(current: Dict[str, Any], allow_network: bool = True) -> Dic
     return changed
 
 
+_LIST_OWNER = {"artists": "artist", "albumartists": "albumartist"}
+
+
+def multi_artist_updates(audio: Any) -> Dict[str, List[str]]:
+    """``{field: [artist, ...]}`` for ARTIST / ALBUMARTIST values that credit
+    several artists but are not stored the configured way yet (separate tag
+    values, or one value with the chosen separator), with artist rules
+    applied to each name. Single-artist fields are left to the normal pass."""
+    out: Dict[str, List[str]] = {}
+    for field in ("artist", "albumartist"):
+        try:
+            names: List[str] = []
+            for name in artist_format.current_names(audio, field):
+                name = artist_names.resolve(name)
+                if name and name.casefold() not in {n.casefold() for n in names}:
+                    names.append(name)
+            if len(names) > 1 and artist_format.tag_values(names) != artist_format.read_values(audio, field):
+                out[field] = names
+        except Exception as exc:
+            logger.debug("multi-artist check failed for %s: %s", field, exc)
+    return out
+
+
 def _save(audio: Any) -> None:
     try:
         from core.metadata.common import get_mutagen_symbols, save_audio_file
@@ -165,13 +188,23 @@ def apply_to_file(file_path: str, lock_factory: Optional[Callable[[str], Any]] =
             return {}
         current = _read(audio, kind)
         changed = transform_values(current)
-        if not changed:
+        artists = multi_artist_updates(audio)
+        if not changed and not artists:
             return {}
         keep_original = bool(config.get("translate.write_original_tags"))
         for field, value in changed.items():
+            # artist fields with several artists are written below, in the
+            # configured multi-artist form, together with their list tag
+            if field in artists or _LIST_OWNER.get(field) in artists:
+                continue
             _write(audio, kind, field, value)
-            if keep_original and field in _FIELDS:
-                _write_original(audio, kind, field, current[field])
+        for field, names in artists.items():
+            artist_format.write_values(audio, field, names)
+            changed[field] = artist_format.display(names)
+        if keep_original:
+            for field in changed:
+                if field in _FIELDS and current.get(field) and current[field] != changed[field]:
+                    _write_original(audio, kind, field, current[field])
         _save(audio)
         logger.info("Fork tags for %s: %s", os.path.basename(file_path),
                     {k: v for k, v in changed.items() if k in _FIELDS})

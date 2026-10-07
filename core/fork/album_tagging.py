@@ -27,7 +27,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.fork import config, ownership, tags
+from core.fork import artist_format, config, ownership, tags
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.album_tagging")
@@ -204,40 +204,8 @@ def _album_artist(album: Dict[str, Any], artist: Dict[str, Any]) -> str:
     return names[0] if names else ""
 
 
-ARTIST_SEPARATOR = "; "
-# "A, B" / "A & B" / "A、B" / "A / B" / "A feat. B" / "A FT B" / "A featuring B" / "A x B" …
-_CREDIT_SEPARATORS_RE = re.compile(
-    r"\s*[,;、，；]\s*|\s+[&/×+]\s+|\s*\(?\b(?:feat\.?|ft\.?|featuring)\s+|\s+(?:with|vs\.?|x)\s+", re.I)
-
-
 def split_credit(text: str) -> List[str]:
-    """The individual artists in a credit string. A string that is itself one
-    known artist ("Simon & Garfunkel") is returned whole."""
-    from core.fork import artist_names
-
-    text = " ".join(str(text or "").split())
-    if not text:
-        return []
-    parts = [p.strip(" )") for p in _CREDIT_SEPARATORS_RE.split(text)]
-    parts = [p for p in parts if p]
-    if len(parts) <= 1 or artist_names.is_single_artist(text):
-        return [text]
-    return parts
-
-
-def join_artists(names: List[str], apply_rules: bool) -> str:
-    """``"A; B; C"`` from credit strings that may each hide several artists,
-    with artist rules applied per artist and duplicates removed."""
-    from core.fork import artist_names
-
-    out: List[str] = []
-    for credit in names:
-        for name in split_credit(credit):
-            if apply_rules:
-                name = artist_names.resolve(name)
-            if name and name.casefold() not in {n.casefold() for n in out}:
-                out.append(name)
-    return ARTIST_SEPARATOR.join(out)
+    return artist_format.split_credit(text)
 
 
 def source_tags(album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, Any],
@@ -263,8 +231,10 @@ def proposals(album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[s
               apply_rules: bool, semicolons: bool = True) -> List[Dict[str, Any]]:
     """Per track: ``{"source": tags from the source, "proposed": tags to write}``.
 
-    ``semicolons`` rewrites Artist and Album artist as ``"A; B"`` whatever
-    separator the source used ("A, B", "A & B", "A feat. B").
+    ``semicolons`` (kept name; "separate multiple artists") splits Artist and
+    Album artist into individual artists whatever separator the source used
+    ("A, B", "A & B", "A feat. B") and shows them the way the configured
+    strategy stores them: "A; B" for separate tags, else the chosen separator.
     """
     out = []
     for position, track in enumerate(tracks):
@@ -279,9 +249,10 @@ def proposals(album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[s
             try:
                 # the source's own artist LIST is the best split there is; each
                 # entry is still checked for a separator hiding inside it
-                names = _artist_names(track) or [source["artist"]]
-                proposed["artist"] = join_artists(names, apply_rules) or proposed["artist"]
-                proposed["albumartist"] = join_artists([source["albumartist"]], apply_rules) or proposed["albumartist"]
+                names = artist_format.artist_list(_artist_names(track) or [source["artist"]], apply_rules)
+                album_names = artist_format.artist_list([source["albumartist"]], apply_rules)
+                proposed["artist"] = artist_format.display(names) or proposed["artist"]
+                proposed["albumartist"] = artist_format.display(album_names) or proposed["albumartist"]
             except Exception as exc:
                 logger.warning("Could not normalise artist separators for %r: %s", source.get("title"), exc)
         out.append({"source": source, "proposed": proposed})
@@ -490,6 +461,8 @@ def preview(folder: str, album: Dict[str, Any], artist: Dict[str, Any], tracks: 
         "unmatched_tracks": [i for i in range(len(tracks)) if i not in matched],
         "total_tracks": len(tracks),
         "truncated": len(files) >= _MAX_FILES,
+        "artist_mode": {"split_tags": artist_format.split_tags_enabled(),
+                        "separator": artist_format.separator().strip() or artist_format.separator()},
     }
 
 
@@ -510,9 +483,11 @@ def _clean_tags(raw: Any) -> Dict[str, Any]:
     return out
 
 
-def _write_extras(path: str, originals: Dict[str, str], ids: Dict[str, str]) -> None:
-    """Originals (for the fork's ownership check) and source ids, additively."""
-    if not originals and not ids:
+def _write_extras(path: str, originals: Dict[str, str], ids: Dict[str, str],
+                  artists: Optional[Dict[str, List[str]]] = None) -> None:
+    """Originals (for the fork's ownership check), source ids, and the artist
+    fields in their final multi-artist form — additively."""
+    if not originals and not ids and not artists:
         return
     from mutagen import File as MutagenFile
 
@@ -522,6 +497,8 @@ def _write_extras(path: str, originals: Dict[str, str], ids: Dict[str, str]) -> 
     kind = tags._kind(audio)
     if not kind:
         return
+    for field, names in (artists or {}).items():
+        artist_format.write_values(audio, field, names)
     for field, value in originals.items():
         tags._write_original(audio, kind, field, value)
     if ids:
@@ -565,7 +542,9 @@ def _template_path(root: str, values: Dict[str, Any], album: Dict[str, Any], tot
         album_type = "Album"
     context = {
         "artist": values.get("artist") or values.get("albumartist") or "Unknown Artist",
-        "albumartist": values.get("albumartist") or values.get("artist") or "Unknown Artist",
+        # a multi-artist album files under its first artist, as upstream does
+        "albumartist": (artist_format.parse_display(values.get("albumartist") or values.get("artist") or "")
+                        or ["Unknown Artist"])[0],
         "album": values.get("album") or "Unknown Album",
         "title": values.get("title") or "Unknown Track",
         "track_number": values.get("track_number") or 1,
@@ -605,7 +584,7 @@ def _move(src: str, dst: str) -> None:
 
 def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist: Dict[str, Any],
           tracks: List[Dict[str, Any]], source: str = "", rename: bool = False,
-          apply_rules: bool = True) -> Dict[str, Any]:
+          apply_rules: bool = True, separate_artists: bool = True) -> Dict[str, Any]:
     """Write tags for each row ``{"rel", "track", "tags"}``; rename when asked."""
     from core.tag_writer import write_tags_to_file
 
@@ -649,7 +628,13 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
                 src = source_tags(album, artist, track, t_idx)
                 originals = {f: src[f] for f in ("title", "album", "artist", "albumartist")
                              if src.get(f) and values.get(f) and src[f] != values[f]}
-            _write_extras(path, originals, _source_ids(source, album, artist, track) if track is not None else {})
+            # the text boxes hold one line per field; store it per the strategy
+            # (separate tag values, or the single joined value as typed)
+            artists = {}
+            if separate_artists:
+                artists = {f: artist_format.parse_display(values[f]) for f in ("artist", "albumartist") if values.get(f)}
+            _write_extras(path, originals, _source_ids(source, album, artist, track) if track is not None else {},
+                          artists)
         except Exception as exc:
             logger.debug("Extras not written for %s: %s", path, exc)
         entry["ok"] = True

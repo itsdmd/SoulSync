@@ -6426,3 +6426,22 @@ class RepairWorker:
             if conn:
                 conn.close()
         return './Transfer'
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Comma Artist Splitter: after upstream's fix has verified and re-tagged the
+# files ("A; B" plus the Artists list), rewrite the artist — and an album
+# artist that was the same combined string — in the form the job's settings
+# ask for: separate tag values, or one value with the chosen separator.
+# See core/fork/artist_format.py and FORK.md.
+_upstream_fix_comma_artist_split = RepairWorker._fix_comma_artist_split
+
+
+def _fork_fix_comma_artist_split(self, entity_type, entity_id, file_path, details):
+    from core.fork import hooks as _fork_hooks
+    before = _fork_hooks.comma_split_before(self, details)
+    result = _upstream_fix_comma_artist_split(self, entity_type, entity_id, file_path, details)
+    return _fork_hooks.comma_split_after(self, details, before, result)
+
+
+RepairWorker._fix_comma_artist_split = _fork_fix_comma_artist_split

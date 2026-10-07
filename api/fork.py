@@ -262,7 +262,8 @@ def album_tag_apply():
         data = album_tagging.apply(
             str(body.get("folder") or ""), rows, album, artist, tracks,
             source=str(body.get("source") or ""), rename=body.get("rename") is True,
-            apply_rules=body.get("apply_rules", True) is not False)
+            apply_rules=body.get("apply_rules", True) is not False,
+            separate_artists=body.get("semicolons", True) is not False)
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         return _folder_error(exc)
     return jsonify(success=True, **data)

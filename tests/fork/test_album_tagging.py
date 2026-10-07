@@ -277,3 +277,29 @@ def test_musicbrainz_outage_leaves_an_ambiguous_credit_whole(library, monkeypatc
     monkeypatch.setattr(artist_names, "_mb_client", lambda: Down())
     artist_names._single_artist_cache.clear()
     assert album_tagging.split_credit("Earth, Wind & Fire") == ["Earth, Wind & Fire"]
+
+
+def test_apply_stores_artists_per_the_strategy(library, fork_env):
+    folder = library / "Multi"
+    path = _flac(str(folder / "01.flac"), artist="old")
+    row = {"rel": "01.flac", "track": 2,
+           "tags": {"title": "Duet", "artist": "Jay Chou; Lara", "albumartist": "Jay Chou; Lara",
+                    "album": "X", "track_number": 3, "disc_number": 1}}
+    album_tagging.apply(str(folder), [row], ALBUM, ARTIST, TRACKS)
+    audio = FLAC(path)
+    assert audio["artist"] == ["Jay Chou", "Lara"] and audio["albumartist"] == ["Jay Chou", "Lara"]
+    assert audio["artists"] == ["Jay Chou", "Lara"]
+    # chosen separator: the proposal is shown joined, and written as typed
+    fork_env.set("fork.artists.split_tags", False)
+    fork_env.set("fork.artists.separator", "comma")
+    props = album_tagging.proposals(ALBUM, ARTIST, TRACKS, apply_rules=True)
+    assert props[2]["proposed"]["artist"] == "Jay Chou, Lara"
+    row["tags"]["artist"] = row["tags"]["albumartist"] = "Jay Chou, Lara"
+    album_tagging.apply(str(folder), [row], ALBUM, ARTIST, TRACKS)
+    audio = FLAC(path)
+    assert audio["artist"] == ["Jay Chou, Lara"] and audio["albumartist"] == ["Jay Chou, Lara"]
+    # "separate multiple artists" unticked in the dialog: text is written verbatim
+    fork_env.set("fork.artists.split_tags", True)
+    row["tags"]["artist"] = "Jay Chou; Lara"
+    album_tagging.apply(str(folder), [row], ALBUM, ARTIST, TRACKS, separate_artists=False)
+    assert FLAC(path)["artist"] == ["Jay Chou; Lara"]

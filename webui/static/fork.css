@@ -428,3 +428,8 @@ select.fork-album-input option { background: #181818; }
     text-decoration: underline;
     cursor: pointer;
 }
+
+.fork-album-mode {
+    font-size: 0.76rem;
+    color: rgba(255, 255, 255, 0.5);
+}

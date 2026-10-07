@@ -281,6 +281,7 @@
         const status = el('span', { class: 'fork-album-status' });
         const applyBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Apply tags', disabled: true });
         const albumInput = el('input', { class: 'fork-album-input', 'aria-label': 'Album' });
+        const artistMode = el('span', { class: 'fork-album-mode' });
         const yearInput = el('input', { class: 'fork-album-input fork-album-year', 'aria-label': 'Year' });
 
         const check = (label, key, help, onChange) => el('label', { class: 'fork-album-check', title: help }, [
@@ -301,8 +302,9 @@
             el('div', { class: 'fork-album-options' }, [
                 check('Use my artist rules and translations', 'applyRules',
                     'Off: propose exactly what the metadata source reports.', () => load()),
-                check('Separate multiple artists with semicolons', 'semicolons',
-                    'Writes "A; B" instead of "A, B", "A & B" or "A feat. B" in Artist and Album artist. A name MusicBrainz or your rules know as one artist is left whole.', () => load()),
+                check('Separate multiple artists', 'semicolons',
+                    'Splits "A, B", "A & B" or "A feat. B" in Artist and Album artist into individual artists. A name MusicBrainz or your rules know as one artist is left whole. How they are stored is set in LLM & Tagging → Artists.', () => load()),
+                artistMode,
                 check('Also rename/move files to my path format', 'rename',
                     'Off (default): only tags change; files stay where they are.'),
             ]),
@@ -398,6 +400,10 @@
                 body.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
                 return;
             }
+            const mode = data.artist_mode || {};
+            artistMode.textContent = !opts.semicolons ? ''
+                : mode.split_tags ? 'Each artist is written as its own tag; type “;” between artists.'
+                    : `Artists are written as one tag joined with “${mode.separator}”.`;
             const first = data.tracks[0] ? data.tracks[0].proposed : {};
             albumInput.value = first.album || '';
             yearInput.value = first.year || '';

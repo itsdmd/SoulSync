@@ -226,3 +226,34 @@ def same_identity(db_track: Any, track_name: str, artist_name: str, album: Any, 
     except Exception as exc:
         logger.warning("same_identity failed: %s", exc)
         return False
+
+
+# ── Comma Artist Splitter: write the split the configured way ───────────
+
+def comma_split_before(worker: Any, details: Any) -> Any:
+    """Files whose ALBUM artist is the combined string, noted before
+    upstream's fix replaces it with the first artist only."""
+    if not _active():
+        return set()
+    try:
+        from core.fork import comma_split
+
+        return comma_split.album_artist_files(worker, details)
+    except Exception as exc:
+        logger.debug("comma_split_before failed: %s", exc)
+        return set()
+
+
+def comma_split_after(worker: Any, details: Any, before: Any, result: Any) -> Any:
+    if not _active():
+        return result
+    try:
+        if not isinstance(result, dict) or not result.get("success") \
+                or result.get("action") != "artists_split":
+            return result
+        from core.fork import comma_split
+
+        return comma_split.apply_strategy(worker, details, before or set(), result)
+    except Exception as exc:
+        logger.warning("comma_split_after failed: %s", exc)
+        return result

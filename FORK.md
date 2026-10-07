@@ -18,7 +18,8 @@ All of it is configured from **LLM & Tagging** in the sidebar (under Settings).
 | 3 | Discography: hide owned | "Hide owned" in the Download Discography dialog; owned releases are also shown as owned and left unchecked. |
 | 4 | Import: rename only | The file is moved and renamed to the path format of the release it was matched to, and nothing inside the file changes: no tag rewrite, artwork, lyrics embed, ReplayGain or conversion. Manual imports: the switch in the Import page header. Automatic watcher: "Rename only" in the Import page's settings (gear). |
 | 6 | Downloads page | Batches are full-width rows instead of a card grid, with a search box that filters by album/batch name, song title or artist (every word must match, any order; case and accents ignored). A batch found by one of its songs opens and shows just the matching songs. |
-| 7 | Album pop-up | (Library → artist → album.) Opening an album only checks the library and shows Found/Missing per track; nothing is searched or downloaded until **Download missing** is pressed, and owned tracks start unticked. A **Local files** bar shows the folder holding the album and lets you pick another, by browsing or by searching the library for a folder name. **Auto-tag…** matches that folder's files to the album's tracks (title incl. original/translation equivalence and file name, track position, duration), and shows an editable proposal before writing. Options: use artist rules + translations (on); separate multiple artists with semicolons (on) — "A, B", "A & B", "A feat. B" become "A; B" in Artist and Album artist, except a name your rules or MusicBrainz know as one artist ("Simon & Garfunkel"); rename/move to the path template (off). Writes source ids and `SOULSYNC_ORIGINAL_*` too; other tags are left alone. |
+| 7 | Album pop-up | (Library → artist → album.) Opening an album only checks the library and shows Found/Missing per track; nothing is searched or downloaded until **Download missing** is pressed, and owned tracks start unticked. A **Local files** bar shows the folder holding the album and lets you pick another, by browsing or by searching the library for a folder name. **Auto-tag…** matches that folder's files to the album's tracks (title incl. original/translation equivalence and file name, track position, duration), and shows an editable proposal before writing. Options: use artist rules + translations (on); separate multiple artists (on) — "A, B", "A & B", "A feat. B" are split into individual artists and stored per feature 8 (shown as "A; B" in the edit box when tags are split); rename/move to the path template (off). Writes source ids and `SOULSYNC_ORIGINAL_*` too; other tags are left alone. |
+| 8 | Multiple artists | How several artists on one track are stored, for Artist and Album artist alike. **Split into separate tags** (default): one tag value per artist (`ARTIST=A`, `ARTIST=B`). Or, with that off, one value joined with a chosen **separator** (semicolon, comma, slash, ampersand). The two are mutually exclusive: the separator is locked while tag splitting is on. Set in LLM & Tagging → Multiple artists; applied by the download/import tag pass and the album auto-tagger. The **Comma Artist Splitter** tool has the same two settings of its own (Split Into Separate Tags, Separator) and also applies them to an album artist that was the combined string. A credit that is one act ("Simon & Garfunkel") is never split when a rule or MusicBrainz knows it. |
 | 5 | Ownership across renamed names | "Already in the library?" no longer depends on a source name fuzzy-matching a translated library name. See below. |
 
 Ollama is reached at `OLLAMA_URL` (overridable in the panel). In the Portainer
@@ -46,6 +47,13 @@ a minute at a time and everything else behaves like upstream.
   refresh its library before discography checks reflect the new tags; the
   tagger changes files, not SoulSync's database (except the path, when it
   moves a file).
+- **Splitting tags changes existing habits.** With tag splitting on, a track
+  SoulSync downloads with two artists gets two ARTIST values where upstream
+  would write one joined string; media servers that predate multi-value tags
+  show only the first. Upstream's "featured artists in the title" layout (one
+  display artist, longer ARTISTS list) is left as it is. Files the Comma Artist
+  Splitter fixed before this setting existed are not revisited by it; the
+  download/import pass and auto-tag convert a file when they next touch it.
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -90,7 +98,8 @@ New code lives in files upstream does not have:
 
 ```
 core/fork/            config, ollama client, sqlite store, translate, lyrics,
-                      artist_names, search_terms, tags, ownership, album_tagging, hooks
+                      artist_names, artist_format, comma_split, search_terms, tags,
+                      ownership, album_tagging, hooks
 api/fork.py           /api/fork/* endpoints
 webui/static/fork-ui.js                         the LLM & Tagging panel
 webui/static/fork.css                           style overrides (loaded last): Downloads rows, search box, album pop-up
@@ -130,6 +139,9 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/library_reorganize.py` | EOF wrappers: `_finalize_track`, `_rename_track_in_place` (same) |
 | `core/repair_jobs/track_number_repair.py` | EOF wrapper: `_rename_to_basename` (same) |
 | `core/repair_worker.py`, `core/repair_jobs/unknown_artist_fixer.py` | 2 lines at each sidecar move (same) |
+| `core/repair_worker.py` | EOF wrapper around `_fix_comma_artist_split` (store the split per the job's strategy) |
+| `core/repair_jobs/comma_artist_splitter.py` | EOF block: two extra settings, their options and help text |
+| `webui/src/routes/tools/-ui/operations.tsx` | select `disabled`/`title` from `-tools.fork.ts` (separator lock) |
 | `core/downloads/master.py` | 7 lines: external-id ownership before a track is queued |
 | `core/wishlist/library_match.py` | EOF wrapper around `_strict_identity_matches` |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |

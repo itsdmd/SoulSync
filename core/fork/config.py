@@ -60,6 +60,13 @@ def defaults() -> Dict[str, Any]:
             "enabled": True,
             "auto_lookup": True,
         },
+        "artists": {
+            # Several artists on one track: write one tag value per artist
+            # (ARTIST=A, ARTIST=B). Applies to ALBUMARTIST too.
+            "split_tags": True,
+            # Only used when split_tags is off: semicolon | comma | slash | ampersand
+            "separator": "semicolon",
+        },
         "import": {
             # The automatic import watcher moves/renames only, leaving file
             # metadata untouched (manual imports have their own switch).

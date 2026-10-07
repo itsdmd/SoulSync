@@ -636,3 +636,26 @@ class CommaArtistSplitterJob(RepairJob):
         finally:
             if conn:
                 conn.close()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# How the split artists are written is a choice: one tag value per artist
+# (default), or one value joined with a chosen separator. The two settings are
+# mutually exclusive — the separator only applies when tag splitting is off —
+# and the same strategy is applied to the album artist. See
+# core/fork/artist_format.py and FORK.md.
+CommaArtistSplitterJob.default_settings = {
+    **CommaArtistSplitterJob.default_settings,
+    'split_into_separate_tags': True,
+    'separator': 'semicolon',
+}
+CommaArtistSplitterJob.setting_options = {
+    **(CommaArtistSplitterJob.setting_options or {}),
+    'separator': ['semicolon', 'comma', 'slash', 'ampersand'],
+}
+CommaArtistSplitterJob.help_text += (
+    '\n- Split Into Separate Tags: write one artist tag per artist (ARTIST=A, ARTIST=B) '
+    'instead of one joined value. Also applied to the album artist.'
+    '\n- Separator: the character used between artists when the tag is NOT split '
+    '(ignored while Split Into Separate Tags is on).'
+)
