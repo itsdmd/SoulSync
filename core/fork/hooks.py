@@ -49,13 +49,12 @@ def rescue_candidates(accepted: list, results: list, track: Any, query: Optional
     try:
         from core.fork import search_terms
 
-        alt = search_terms.alternate_track(track, query)
-        if alt is None:
-            return accepted
-        rescued = select(results, alt, None, *args)
-        if rescued:
-            logger.info("Accepted %s candidate(s) via search variant %r", len(rescued), query)
-        return rescued or accepted
+        for alt in search_terms.alternate_tracks(track, query):
+            rescued = select(results, alt, None, *args)
+            if rescued:
+                logger.info("Accepted %s candidate(s) via search variant %r", len(rescued), query)
+                return rescued
+        return accepted
     except Exception as exc:
         logger.warning("rescue_candidates failed: %s", exc)
         return accepted
@@ -206,6 +205,19 @@ def completion_with_saved_folder(result: Any, album: Any, artist_name: Any, sour
     except Exception as exc:
         logger.debug("completion_with_saved_folder failed: %s", exc)
         return result
+
+
+def incomplete_album_covered(details: Any) -> str:
+    """Album Completeness: the saved folder that holds the whole album, or ""."""
+    if not _active() or not isinstance(details, dict):
+        return ""
+    try:
+        from core.fork import album_tagging
+
+        return album_tagging.finding_covered_by_saved_folder(details)
+    except Exception as exc:
+        logger.debug("incomplete_album_covered failed: %s", exc)
+        return ""
 
 
 # ── lyrics backups (<name>.original.lrc) follow their track ─────────────

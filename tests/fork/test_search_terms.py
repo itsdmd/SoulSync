@@ -13,6 +13,13 @@ def aliases(monkeypatch):
     return table
 
 
+@pytest.fixture(autouse=True)
+def variants_only(fork_env):
+    """These first tests are about the title variants; the broader queries
+    have their own tests below and switch themselves on."""
+    fork_env.set("fork.search_terms.max_broad", 0)
+
+
 def _track():
     return SimpleNamespace(name="残酷な天使のテーゼ", artists=["高橋洋子"], album="Neon Genesis")
 
@@ -113,3 +120,87 @@ def test_alternate_track_handles_dict_artists(llm):
     query = hooks.augment_search_queries(track, [])[0]
     alt = search_terms.alternate_track(track, query)
     assert alt.artists == [{"name": "Yoko Takahashi", "id": "1"}]
+
+
+# ── broader queries ─────────────────────────────────────────────────────
+
+GHIBLI = "A Symphonic Celebration∶ Music from the Studio Ghibli Films of Hayao Miyazaki"
+
+
+def test_album_parts_are_the_pieces_worth_searching_alone():
+    assert search_terms.album_parts(GHIBLI) == [
+        "A Symphonic Celebration", "Music from the Studio Ghibli Films of Hayao Miyazaki"]
+    assert search_terms.album_parts("Frieren - Original Soundtrack (Deluxe)") == [
+        "Frieren - Original Soundtrack", "Frieren"]          # the generic half is dropped
+    assert search_terms.album_parts("OK Computer") == []
+    assert search_terms.album_parts("明日方舟OST5") == []
+
+
+def test_queries_broaden_step_by_step(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 8)
+    llm.replies = [{"titles": ["Merry-Go-Round of Life"],
+                    "albums": ["Music from the Studio Ghibli Films", "Original Soundtrack", "久石譲"]}]
+    track = SimpleNamespace(name="人生のメリーゴーランド", artists=["久石譲"], album=GHIBLI)
+    out = hooks.augment_search_queries(track, ["久石譲 人生のメリーゴーランド"])
+    assert out == [
+        "久石譲 人生のメリーゴーランド",                      # 1. artist + title (upstream)
+        "久石譲 Merry-Go-Round of Life",                      #    … and its variants
+        f"久石譲 {GHIBLI}",                                   # 2. artist + album
+        "久石譲 Music from the Studio Ghibli Films",
+        GHIBLI,                                               # 3. album alone
+        "Music from the Studio Ghibli Films",
+        "A Symphonic Celebration",                            # 4. part of the album name
+        "Music from the Studio Ghibli Films of Hayao Miyazaki",
+        "Merry-Go-Round of Life",                             # 5. an alternative title alone
+    ]
+    assert llm.calls[0][1]["max_albums"] == 3
+
+
+def test_broad_limit_and_a_single_named_after_its_track(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 2)
+    llm.replies = [{"titles": [], "albums": []}, {"titles": [], "albums": ["Anything Else"]}]
+    track = SimpleNamespace(name="Creep", artists=["Radiohead"], album="Pablo Honey: Collectors Edition")
+    assert hooks.augment_search_queries(track, ["radiohead creep"]) == [
+        "radiohead creep", "Radiohead Pablo Honey: Collectors Edition", "Pablo Honey: Collectors Edition"]
+    single = SimpleNamespace(name="Creep", artists=["Radiohead"], album="Creep")
+    assert hooks.augment_search_queries(single, ["radiohead creep"]) == ["radiohead creep"]
+    assert "album" not in llm.calls[1][1] and "max_albums" not in llm.calls[1][1]
+
+
+def test_broad_queries_work_from_the_cache_and_follow_the_setting(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 1)
+    llm.replies = [{"titles": ["Thesis of a Cruel Angel"], "albums": ["Shin Seiki Evangelion"]}]
+    track = SimpleNamespace(name="残酷な天使のテーゼ", artists=["高橋洋子"], album="Neon Genesis Evangelion")
+    first = hooks.augment_search_queries(track, [])
+    assert first[-1] == "高橋洋子 Neon Genesis Evangelion" or first[-1] == "Yoko Takahashi Neon Genesis Evangelion"
+    fork_env.set("fork.search_terms.max_broad", 12)
+    again = hooks.augment_search_queries(track, [])
+    assert len(llm.calls) == 1
+    assert "Yoko Takahashi Shin Seiki Evangelion" in again and "Thesis of a Cruel Angel" in again
+
+
+def test_a_result_of_a_broad_query_may_match_any_variant(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 4)
+    llm.replies = [{"titles": ["Zankoku na Tenshi no Thesis", "A Cruel Angel's Thesis"], "albums": []}]
+    track = SimpleNamespace(name="残酷な天使のテーゼ", artists=["高橋洋子"], album="Neon Genesis Evangelion")
+    hooks.augment_search_queries(track, [])
+    tried = []
+
+    def select(results, candidate_track, q, *rest):
+        tried.append(candidate_track.name)
+        return ["hit"] if candidate_track.name == "A Cruel Angel's Thesis" else []
+
+    assert hooks.rescue_candidates([], ["row"], track, "Neon Genesis Evangelion", select, None, None) == ["hit"]
+    assert tried == ["Zankoku na Tenshi no Thesis", "A Cruel Angel's Thesis"]
+
+
+def test_spare_album_spellings_are_searched_alone_and_artist_in_a_title_is_dropped(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 12)
+    llm.replies = [{"titles": ["Creep (Radiohead)", "Creep - Radiohead"],
+                    "albums": ["Pablo Honey Deluxe", "Pablo Honey Collectors", "Pablo Honey Japan"]}]
+    track = SimpleNamespace(name="Creep", artists=["Radiohead"], album="Pablo Honey")
+    out = hooks.augment_search_queries(track, ["radiohead creep"])
+    assert not any("(Radiohead)" in q or "- Radiohead" in q for q in out)
+    assert out[1:] == ["Radiohead Pablo Honey", "Radiohead Pablo Honey Deluxe",          # 2 (two per step)
+                       "Pablo Honey", "Pablo Honey Deluxe",                              # 3
+                       "Pablo Honey Collectors", "Pablo Honey Japan"]                    # 4: the rest

@@ -372,6 +372,34 @@ def completion_from_saved_folder(result: Dict[str, Any], album: Dict[str, Any], 
     return out
 
 
+_FINDING_ID_KEYS = (("canonical_source", "canonical_album_id"), ("primary_source", "primary_album_id"),
+                    ("spotify", "spotify_album_id"), ("itunes", "itunes_album_id"),
+                    ("deezer", "deezer_album_id"), ("discogs", "discogs_album_id"),
+                    ("hydrabase", "hydrabase_album_id"), ("musicbrainz", "musicbrainz_album_id"))
+
+
+def finding_covered_by_saved_folder(details: Dict[str, Any]) -> str:
+    """For an "incomplete album" finding: the saved folder that already holds
+    the whole album, or "". The album is looked up under each source id the
+    finding carries, then by artist + album name."""
+    expected = _int(details.get("expected_tracks"))
+    if expected <= 0:
+        return ""
+    name, artist_name = str(details.get("album_title") or ""), str(details.get("artist") or "")
+    tried = set()
+    for source_key, id_key in _FINDING_ID_KEYS:
+        source = str(details.get(source_key) or "") if source_key.endswith("_source") else source_key
+        album_id = str(details.get(id_key) or "").strip()
+        if not album_id or (source, album_id) in tried:
+            continue
+        tried.add((source, album_id))
+        folder = saved_folder(source, {"id": album_id, "name": name}, {"name": artist_name})["folder"]
+        if folder:
+            return folder if count_audio_deep(folder) >= expected else ""
+    folder = saved_folder("", {"name": name}, {"name": artist_name})["folder"] if name else ""
+    return folder if folder and count_audio_deep(folder) >= expected else ""
+
+
 def _library_match(db: Any, album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, Any],
                    server_source: Optional[str]) -> Any:
     match = None
@@ -829,14 +857,20 @@ def _move(src: str, dst: str) -> None:
 
 def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist: Dict[str, Any],
           tracks: List[Dict[str, Any]], source: str = "", rename: bool = False,
-          apply_rules: bool = True, separate_artists: bool = True) -> Dict[str, Any]:
-    """Write tags for each row ``{"rel", "track", "tags"}``; rename when asked."""
+          apply_rules: bool = True, separate_artists: bool = True,
+          fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Write tags for each row ``{"rel", "track", "tags"}``; rename when asked.
+
+    ``fields`` limits which of the tags are written (None: all of them). A
+    row's ``tags`` still names every value, so a rename has the whole picture.
+    """
     from core.tag_writer import write_tags_to_file
 
     real = safe_dir(folder)
     root = root_of(real) or real
     keep_originals = apply_rules and bool(config.get("translate.write_original_tags"))
     total_discs = max([_int((r.get("tags") or {}).get("disc_number"), 1) for r in rows] or [1])
+    wanted = set(_EDITABLE) if fields is None else {f for f in fields if f in _EDITABLE}
     results, written, moved = [], 0, 0
     for row in rows if isinstance(rows, list) else []:
         rel = str(row.get("rel") or "")
@@ -846,22 +880,28 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
         if not rel or not _inside(path, real) or not os.path.isfile(path):
             entry["error"] = "File not found in the folder"
             continue
-        values = _clean_tags(row.get("tags"))
+        all_values = _clean_tags(row.get("tags"))
+        values = {k: v for k, v in all_values.items() if k in wanted}
         if not values:
             entry["error"] = "No tag values"
             continue
+        album_artist_too = "artist" in values and "albumartist" in wanted
+        album_artist_alone = "albumartist" in values and "artist" not in values
         db_data = {
             "title": values.get("title"),
             "track_artist": values.get("artist"),
-            "artist_name": values.get("albumartist") or values.get("artist"),
+            # The writer fills a missing track artist from the album artist, so
+            # an album artist written WITHOUT the artist goes in with the
+            # extras below instead of through it.
+            "artist_name": (values.get("albumartist") or values.get("artist")) if album_artist_too else None,
             "album_title": values.get("album"),
             "year": values.get("year"),
             "track_number": values.get("track_number"),
             "disc_number": values.get("disc_number"),
-            "track_count": len(tracks) or None,
+            "track_count": (len(tracks) or None) if "track_number" in wanted else None,
         }
-        outcome = write_tags_to_file(path, {k: v for k, v in db_data.items() if v not in (None, "")},
-                                     embed_cover=False)
+        db_data = {k: v for k, v in db_data.items() if v not in (None, "")}
+        outcome = write_tags_to_file(path, db_data, embed_cover=False) if db_data else {"success": True}
         if not outcome.get("success"):
             entry["error"] = outcome.get("error") or "Could not write tags"
             continue
@@ -878,6 +918,8 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
             artists = {}
             if separate_artists:
                 artists = {f: artist_format.parse_display(values[f]) for f in ("artist", "albumartist") if values.get(f)}
+            elif album_artist_alone:
+                artists = {"albumartist": [values["albumartist"]]}
             _write_extras(path, originals, _source_ids(source, album, artist, track) if track is not None else {},
                           artists)
         except Exception as exc:
@@ -886,7 +928,7 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
         written += 1
         if rename:
             try:
-                target = _template_path(root, values, album, len(tracks), total_discs,
+                target = _template_path(root, all_values, album, len(tracks), total_discs,
                                         os.path.splitext(path)[1])
                 if target and os.path.normpath(target) != os.path.normpath(path):
                     if os.path.exists(target):

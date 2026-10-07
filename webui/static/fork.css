@@ -319,7 +319,21 @@
     font-size: 0.8rem;
 }
 
-.fork-album-albumrow label:last-child { flex: 0 0 150px; }
+.fork-album-albumrow label:last-child { flex: 0 0 180px; }
+
+.fork-album-fieldhead {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.fork-album-fieldcb { margin: 0; cursor: pointer; }
+
+.fork-album-input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
 
 .fork-album-check {
     display: flex;

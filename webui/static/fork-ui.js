@@ -8,7 +8,7 @@
     const API = '/api/fork';
     const TOGGLES = [
         ['search_terms.enabled', 'Suggest extra search terms',
-            'Ask the model for alternative artist/title spellings (romanized, original script, official English) and search with them after the standard queries.'],
+            'Ask the model for alternative title and album spellings (romanized, original script, official English) and search with them after the standard queries, then with broader and broader ones.'],
         ['search_terms.match_variants', 'Accept matches on a suggested name',
             'Lets a file named with the suggested spelling pass the match check when nothing matched the original name.'],
         ['translate.titles', 'Translate CJK song titles', ''],
@@ -241,6 +241,10 @@
                 ]),
             ]),
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
+            textRow('Broader searches per track', 'search_terms.max_broad', '', {
+                type: 'number', min: '0', max: '12',
+                title: 'Tried last, widest last: artist + album, album alone, part of the album name, an alternative title alone. 0 turns them off.',
+            }),
             el('div', { class: 'fork-row', style: 'align-items:flex-start' }, [
                 el('label', { text: 'Terms that are not translations', style: 'padding-top:7px' }),
                 keepTerms,

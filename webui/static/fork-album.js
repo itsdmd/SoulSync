@@ -338,12 +338,19 @@
     const TAGGER_OPTIONS_KEY = 'soulsync-fork.auto-tag.options';
     const TAGGER_DEFAULTS = { applyRules: true, translate: true, semicolons: true, rename: false };
 
+    // every tag the dialog can write; each has a checkbox, all on by default
+    const TAG_KEYS = ['album', 'year'].concat(FIELDS.map((f) => f[0]));
+
     function loadTaggerOptions() {
-        const opts = Object.assign({}, TAGGER_DEFAULTS);
+        const opts = Object.assign({}, TAGGER_DEFAULTS, { fields: {} });
+        for (const key of TAG_KEYS) opts.fields[key] = true;
         try {
             const saved = JSON.parse(window.localStorage.getItem(TAGGER_OPTIONS_KEY) || '{}');
             for (const key of Object.keys(TAGGER_DEFAULTS)) {
                 if (typeof saved[key] === 'boolean') opts[key] = saved[key];
+            }
+            for (const key of TAG_KEYS) {
+                if (saved.fields && saved.fields[key] === false) opts.fields[key] = false;
             }
         } catch (_) { /* unreadable storage: defaults */ }
         return opts;
@@ -353,6 +360,7 @@
         try {
             const out = {};
             for (const key of Object.keys(TAGGER_DEFAULTS)) out[key] = !!opts[key];
+            out.fields = Object.assign({}, opts.fields);
             window.localStorage.setItem(TAGGER_OPTIONS_KEY, JSON.stringify(out));
         } catch (_) { /* storage blocked: the choice still holds for this dialog */ }
     }
@@ -383,12 +391,28 @@
             label,
         ]);
 
+        // One checkbox per tag: an unticked tag is left as it is in every file.
+        const fieldToggle = (key, label) => el('input', {
+            type: 'checkbox', checked: opts.fields[key], class: 'fork-album-fieldcb',
+            title: `Write ${label}. Untick to leave this tag as it is in the files.`,
+            'aria-label': `Write ${label}`,
+            onchange: (e) => { opts.fields[key] = e.target.checked; saveTaggerOptions(opts); applyFieldStates(); },
+        });
+        function applyFieldStates() {
+            albumInput.disabled = !opts.fields.album;
+            yearInput.disabled = !opts.fields.year;
+            for (const input of body.querySelectorAll('input[data-field]')) {
+                input.disabled = !opts.fields[input.dataset.field];
+            }
+            refreshStatus();
+        }
+
         const root = overlay('fork-album-tagger', [
             el('h3', { text: `Auto-tag: ${(process.album && process.album.name) || 'album'}` }),
             el('div', { class: 'fork-album-crumb', text: state.folder }),
             el('div', { class: 'fork-album-albumrow' }, [
-                el('label', {}, ['Album', albumInput]),
-                el('label', {}, ['Year', yearInput]),
+                el('label', {}, [fieldToggle('album', 'Album'), 'Album', albumInput]),
+                el('label', {}, [fieldToggle('year', 'Year'), 'Year', yearInput]),
             ]),
             el('div', { class: 'fork-album-options' }, [
                 check('Use my artist rules and saved translations', 'applyRules',
@@ -414,10 +438,13 @@
         const proposedFor = (trackIndex) => (data.tracks[trackIndex] ? { ...data.tracks[trackIndex].proposed } : null);
 
         function refreshStatus() {
+            if (!data) return;
             const chosen = rows.filter((r) => r.include).length;
-            status.textContent = `${chosen} of ${rows.length} files will be tagged`
+            const writing = TAG_KEYS.filter((key) => opts.fields[key]).length;
+            status.textContent = (writing ? `${chosen} of ${rows.length} files will be tagged` : 'No tag is ticked: nothing to write')
+                + (writing && writing < TAG_KEYS.length ? ` (${writing} of ${TAG_KEYS.length} tags)` : '')
                 + (data.unmatched_tracks.length ? ` · ${data.unmatched_tracks.length} album tracks have no file` : '');
-            applyBtn.disabled = chosen === 0;
+            applyBtn.disabled = chosen === 0 || writing === 0;
         }
 
         function renderRow(row) {
@@ -459,6 +486,7 @@
                 const numeric = key.endsWith('_number');
                 inputs[key] = el('input', {
                     class: 'fork-album-input' + (numeric ? ' fork-album-num' : ''), 'aria-label': label,
+                    'data-field': key, disabled: !opts.fields[key],
                     oninput: (e) => { row.tags[key] = e.target.value; row.edited[key] = true; },
                 });
                 const was = row.current[key];
@@ -478,7 +506,8 @@
                 return;
             }
             body.replaceChildren(el('table', { class: 'fork-album-table' }, [
-                el('thead', {}, el('tr', {}, ['', 'File', 'Album track'].concat(FIELDS.map((f) => f[1])).map((t) => el('th', { text: t })))),
+                el('thead', {}, el('tr', {}, ['', 'File', 'Album track'].map((t) => el('th', { text: t })).concat(
+                    FIELDS.map(([key, label]) => el('th', {}, el('label', { class: 'fork-album-fieldhead' }, [fieldToggle(key, label), label])))))),
                 el('tbody', {}, rows.map(renderRow)),
             ]));
             refreshStatus();
@@ -584,10 +613,16 @@
                     rename: opts.rename,
                     apply_rules: opts.applyRules,
                     semicolons: opts.semicolons,
-                    rows: chosen.map((r) => ({
-                        rel: r.rel, track: r.track,
-                        tags: Object.assign({}, r.tags, { album: albumInput.value, year: yearInput.value }),
-                    })),
+                    fields: TAG_KEYS.filter((key) => opts.fields[key]),
+                    // an unticked tag is sent as the file has it now, so a
+                    // rename still builds the path from the real values
+                    rows: chosen.map((r) => {
+                        const tags = Object.assign({}, r.tags, { album: albumInput.value, year: yearInput.value });
+                        for (const key of TAG_KEYS) {
+                            if (!opts.fields[key]) tags[key] = r.current[key] != null ? r.current[key] : '';
+                        }
+                        return { rel: r.rel, track: r.track, tags };
+                    }),
                 }));
                 const problems = result.results.filter((r) => !r.ok || r.rename_error);
                 toast(`Tagged ${result.written} file${result.written === 1 ? '' : 's'}`

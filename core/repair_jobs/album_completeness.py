@@ -1506,3 +1506,36 @@ class AlbumCompletenessJob(RepairJob):
         finally:
             if conn:
                 conn.close()
+
+
+# ── fork: an album whose saved folder holds every track is not incomplete ──
+_upstream_scan = AlbumCompletenessJob.scan
+
+
+def _fork_scan(self, context):
+    from core.fork import hooks
+
+    original = context.create_finding
+    covered = []
+    if original:
+        def create_finding(*args, **kwargs):
+            folder = hooks.incomplete_album_covered(kwargs.get('details'))
+            if folder:
+                covered.append(folder)
+                logger.info("Not flagged, complete in its saved folder: %s", folder)
+                return False
+            return original(*args, **kwargs)
+
+        context.create_finding = create_finding
+    try:
+        result = _upstream_scan(self, context)
+    finally:
+        context.create_finding = original
+    if covered:
+        # upstream counted these as duplicates of an existing finding
+        result.findings_skipped_dedup = max(0, result.findings_skipped_dedup - len(covered))
+        result.skipped += len(covered)
+    return result
+
+
+AlbumCompletenessJob.scan = _fork_scan

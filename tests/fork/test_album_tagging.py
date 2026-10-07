@@ -506,3 +506,72 @@ def test_completion_check_is_wrapped_and_counts_the_saved_folder(library, monkey
     out = completion.check_album_completion(None, {"id": "al1", "name": ALBUM["name"], "total_tracks": 3}, "周杰倫",
                                             source_override="spotify", candidate_albums=[])
     assert out["owned_tracks"] == 2 and out["status"] == "partial"
+
+
+def _apply_fields(library, fields, name):
+    folder = library / name
+    path = _flac(str(folder / "01.flac"), title="old title", artist="Old Artist", albumartist="Old AA",
+                 album="Old Album", date="1999", tracknumber=7, discnumber=2)
+    result = album_tagging.apply(str(folder), [{
+        "rel": "01.flac", "track": 0,
+        "tags": {"title": "Nocturne", "artist": "Jay Chou", "albumartist": "Jay Chou", "album": "New Album",
+                 "year": "2005", "track_number": "1", "disc_number": 1},
+    }], ALBUM, ARTIST, TRACKS, source="spotify", fields=fields)
+    return result, FLAC(path)
+
+
+def test_apply_writes_only_the_ticked_tags(library):
+    result, audio = _apply_fields(library, ["title", "album"], "F1")
+    assert result["written"] == 1
+    assert audio["title"] == ["Nocturne"] and audio["album"] == ["New Album"]
+    assert audio["artist"] == ["Old Artist"] and audio["albumartist"] == ["Old AA"]
+    assert audio["date"] == ["1999"] and audio["tracknumber"][0].split("/")[0] == "7"
+    assert audio["discnumber"][0].split("/")[0] == "2"
+    assert "soulsync_original_artist" not in audio
+
+
+def test_artist_and_album_artist_are_ticked_independently(library):
+    _result, audio = _apply_fields(library, ["albumartist"], "F2")
+    assert audio["albumartist"] == ["Jay Chou"] and audio["artist"] == ["Old Artist"]
+    _result, audio = _apply_fields(library, ["artist"], "F3")
+    assert audio["artist"] == ["Jay Chou"] and audio["albumartist"] == ["Old AA"]
+    assert audio["title"] == ["old title"]
+
+
+def test_no_ticked_tag_writes_nothing(library):
+    result, audio = _apply_fields(library, [], "F4")
+    assert result["written"] == 0 and result["results"][0]["error"] == "No tag values"
+    assert audio["title"] == ["old title"]
+
+
+def test_album_completeness_does_not_flag_an_album_whole_in_its_saved_folder(library):
+    from types import SimpleNamespace
+
+    from core.repair_jobs import album_completeness as job_module
+
+    folder = _album_on_disk(library)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    details = {"album_title": "Library Name", "artist": "Jay Chou", "primary_source": "deezer",
+               "primary_album_id": "dz9", "spotify_album_id": "al1", "expected_tracks": 3}
+    assert album_tagging.finding_covered_by_saved_folder(details) == ""          # 2 of 3 files
+    assert album_tagging.finding_covered_by_saved_folder(dict(details, expected_tracks=2)) == os.path.realpath(folder)
+    assert album_tagging.finding_covered_by_saved_folder(dict(details, spotify_album_id="other")) == ""
+
+    created = []
+    result = SimpleNamespace(findings_skipped_dedup=0, skipped=0)
+
+    def upstream_scan(self, context):
+        for expected in (2, 3):
+            if not context.create_finding(job_id="album_completeness", details=dict(details, expected_tracks=expected)):
+                result.findings_skipped_dedup += 1
+        return result
+
+    context = SimpleNamespace(create_finding=lambda **kw: created.append(kw["details"]["expected_tracks"]) or True)
+    original = context.create_finding
+    job_module._upstream_scan, saved_scan = upstream_scan, job_module._upstream_scan
+    try:
+        out = job_module.AlbumCompletenessJob.scan(None, context)
+    finally:
+        job_module._upstream_scan = saved_scan
+    assert created == [3] and out.skipped == 1 and out.findings_skipped_dedup == 0
+    assert context.create_finding is original
