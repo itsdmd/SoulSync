@@ -29,6 +29,7 @@ import {
   searchImportAlbums,
   searchImportTracks,
 } from '../-import.api';
+import { matcherRefetchInterval, resolveMatcherItem } from '../-import.fork-matcher';
 import {
   formatDuration,
   getDisplayedMatchFile,
@@ -52,13 +53,28 @@ import { fallbackImage, getErrorMessage, useImportQueueActions } from './import-
  * the left.
  */
 export function Matcher({ itemKey }: { itemKey: string }) {
-  const inbox = useQuery(importInboxQueryOptions());
-  const item = inbox.data?.items?.find((row) => row.key === itemKey);
+  // fork: poll while the import folder is being re-read, and keep the item
+  // across a re-read / a changed key instead of declaring it gone
+  // (see -import.fork-matcher.ts)
+  const inbox = useQuery({
+    ...importInboxQueryOptions(),
+    refetchInterval: (query) => matcherRefetchInterval(query.state.data),
+  });
+  const [lastSeen, setLastSeen] = useState<ImportInboxItem | null>(null);
+  const resolved = resolveMatcherItem(inbox.data, itemKey, lastSeen);
+  const item = resolved.state === 'ready' ? resolved.item : undefined;
+  if (item && item !== lastSeen) setLastSeen(item);
 
-  if (inbox.isLoading) {
-    return <div className={styles.centered}>Loading…</div>;
+  if (inbox.isLoading || resolved.state === 'reading') {
+    return (
+      <div className={styles.centered}>
+        {resolved.state === 'reading' && !inbox.isLoading
+          ? 'Reading the import folder…'
+          : 'Loading…'}
+      </div>
+    );
   }
-  if (!item || !item.in_staging) {
+  if (!item) {
     return (
       <div className={styles.empty}>
         <div className={styles.emptyTitle}>This item is no longer in the import folder</div>

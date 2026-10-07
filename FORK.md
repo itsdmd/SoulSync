@@ -172,6 +172,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `webui/src/routes/artist-detail/-ui/discography-modal.tsx` | "Hide owned" button |
 | `webui/src/routes/import/-import.api.ts` | sends `rename_only` |
 | `webui/src/routes/import/-ui/import-page.tsx` | mounts the switch |
+| `webui/src/routes/import/-ui/matcher.tsx` | item lookup goes through `-import.fork-matcher.ts` (survives a folder re-read and a changed key) |
 | `webui/src/routes/import/-ui/settings-drawer.tsx` | mounts the watcher's rename-only row |
 
 Hooks are fail-safe (an exception returns upstream's value) and inert under
