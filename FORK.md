@@ -59,6 +59,13 @@ a minute at a time and everything else behaves like upstream.
 - **The app shares identical GET requests for 2.5 seconds** (`fetch-dedupe.js`).
   The fork's panels re-read a list right after changing it, so their requests
   carry an abort signal, which opts them out. New fork GETs should do the same.
+- **Chinese script variants are the same name.** Traditional and Simplified
+  spellings (相變臨界 / 相变临界) share one translation record and match each
+  other in ownership checks, auto-tag matching and Apply to library. This uses
+  the optional `zhconv` package (GPLv2+, soft-imported, listed at the end of
+  `requirements.txt`); a file keeps its own script in the written name.
+- **Decoration glued to a name** (`相变临界OST`, no bracket or space) is split
+  off like a bracketed one when the Latin tail is nothing but listed terms.
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -150,6 +157,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/downloads/master.py` | 7 lines: external-id ownership before a track is queued |
 | `core/wishlist/library_match.py` | EOF wrapper around `_strict_identity_matches` |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
+| `requirements.txt` | one appended dependency: `zhconv` |
 | `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
 | `webui/index.html` | `<script>` tags for `fork-ui.js` and `fork-album.js`, one `<link>` for `fork.css` |
 | `webui/src/routes/active-downloads/-ui/active-downloads-page.tsx` | search state, filtering, mounts the search box |

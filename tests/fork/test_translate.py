@@ -148,3 +148,25 @@ def test_a_title_that_merely_contains_a_term_is_still_a_translation():
     # and such a record is not purged
     store.save_translation("album", "明日方舟", "Arknights OST", model="existing")
     assert translate.purge_decoration_records() == 0
+
+
+def test_decoration_glued_to_the_name_is_split_off():
+    assert split_name("相变临界OST") == ("相变临界", "", "OST")
+    assert split_name("相变临界 OST") == ("相变临界", "", "OST")
+    assert split_name("夜曲 Remix") == ("夜曲", "", "Remix")
+    assert split_name("Critical Transition Point OST (相变临界OST)") == ("相变临界", "Critical Transition Point OST", "OST")
+    # a Latin tail that is a real word stays part of the name
+    assert split_name("東京Tower") == ("東京Tower", "", "")
+    assert split_name("夜曲A") == ("夜曲A", "", "")
+
+
+def test_traditional_and_simplified_spellings_share_one_translation(llm):
+    from core.fork.cjk import fold
+
+    assert fold("相變臨界") == fold("相变临界") and fold("夜曲") != fold("夜")
+    llm.replies = [_reply("Critical Phase Transition")]
+    assert translate.translate_name("album", "相變臨界") == "Critical Phase Transition (相變臨界)"
+    # the other script reuses the record: no second model call, its own script kept in the name
+    assert translate.translate_name("album", "相变临界OST") == "Critical Phase Transition (相变临界) OST"
+    assert len(llm.calls) == 1
+    assert store.list_translations(kind="album")["total"] == 1

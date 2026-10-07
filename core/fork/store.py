@@ -91,6 +91,27 @@ def get_translation(kind: str, original: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def find_translation(kind: str, original: str) -> Optional[Dict[str, Any]]:
+    """The record for ``original``, or for the same name written in the other
+    Chinese script (相變臨界 / 相变临界), so both always get one translation."""
+    row = get_translation(kind, original)
+    if row:
+        return row
+    from core.fork.cjk import contains_cjk, fold
+
+    if not contains_cjk(original):
+        return None
+    key = fold(original)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM fork_translations WHERE kind = ? AND LENGTH(original) = ?", (kind, len(original))
+        ).fetchall()
+    for candidate in rows:
+        if fold(candidate["original"]) == key:
+            return dict(candidate)
+    return None
+
+
 def save_translation(kind: str, original: str, translated: str, *, model: str = "",
                      user_edited: bool = False) -> None:
     """Insert or update. A model result never replaces a user-edited row."""

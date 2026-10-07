@@ -363,8 +363,9 @@ def scan_folder(folder: str) -> List[Dict[str, Any]]:
 
 
 def _norm(text: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(text or "")).casefold()
-    return "".join(ch for ch in text if ch.isalnum())
+    from core.fork.cjk import fold
+
+    return "".join(ch for ch in fold(text) if ch.isalnum())
 
 
 def _stem_title(rel: str) -> str:

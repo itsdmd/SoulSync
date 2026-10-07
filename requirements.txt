@@ -94,3 +94,8 @@ simple-websocket==1.1.0
 # it's missing or fails, so this is never a hard runtime requirement.
 spotipyFree>=1.1.2,<2
 websockets>=12  # required by SpotipyFree/spotapi, not pulled in automatically
+
+# fork (itsdmd/SoulSync): Traditional <-> Simplified Chinese, used only to
+# COMPARE names (相變臨界 == 相变临界). GPLv2+, so it is soft-imported and never
+# vendored; without it names in different scripts simply do not match.
+zhconv>=1.4.3,<2

@@ -120,6 +120,66 @@ def _is_version_text(inner: str) -> bool:
     return is_decoration(inner)
 
 
+# "相变临界OST", "夜曲 Remix": a Latin tail attached straight to the CJK name
+# with no bracket. Only split off when the tail is nothing but decoration.
+_GLUED_TAIL_RE = re.compile(r"^(?P<name>.*[^\x00-\x7F])\s*(?P<tail>[A-Za-z][A-Za-z0-9 .'\-]*)$")
+
+
+def _split_glued_tail(core: str) -> Tuple[str, str]:
+    m = _GLUED_TAIL_RE.match(core)
+    if m and contains_cjk(m.group("name")) and is_only_decoration(m.group("tail")):
+        return m.group("name").strip(), m.group("tail").strip()
+    return core, ""
+
+
+_convert = None
+
+
+def to_simplified(text: str) -> str:
+    """Traditional Chinese -> Simplified, for COMPARING names only. Sources
+    disagree on the script (相變臨界 vs 相变临界) and they are the same name.
+    Uses the optional ``zhconv`` package; without it the text is unchanged."""
+    global _convert
+    if _convert is None:
+        try:
+            import zhconv
+
+            _convert = lambda value: zhconv.convert(value, "zh-hans")  # noqa: E731
+        except Exception:
+            _convert = lambda value: value  # noqa: E731
+    try:
+        return _convert(text)
+    except Exception:
+        return text
+
+
+def fold(text: object) -> str:
+    """Comparison key for a name: Unicode-normalised, case-folded, script
+    variants unified, whitespace removed."""
+    import unicodedata
+
+    value = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    if contains_cjk(value):
+        value = to_simplified(value)
+    return "".join(value.split())
+
+
+def script_variants(text: str) -> list:
+    """``text`` plus its Simplified / Traditional spellings, for searching a
+    database that may hold either."""
+    out = [text]
+    try:
+        import zhconv
+
+        for locale in ("zh-hans", "zh-hant"):
+            variant = zhconv.convert(text, locale)
+            if variant and variant not in out:
+                out.append(variant)
+    except Exception:  # noqa: S110 - the package is optional
+        pass
+    return out
+
+
 def split_name(value: str) -> Tuple[str, str, str]:
     """Split ``value`` into ``(core, existing_translation, suffix)``.
 
@@ -158,4 +218,7 @@ def split_name(value: str) -> Tuple[str, str, str]:
             else:
                 core, existing = inner, head
 
+    core, tail = _split_glued_tail(core)
+    if tail:
+        suffixes.append(tail)
     return core, existing, " ".join(suffixes)

@@ -280,3 +280,33 @@ def test_tool_is_named_for_what_it_now_does():
 
     assert CommaArtistSplitterJob.display_name == "Multiple Artist Formatter"
     assert CommaArtistSplitterJob.job_id == "comma_artist_splitter"   # saved settings and findings carry over
+
+
+# ── script variants and decoration glued to the name ────────────────────
+
+def test_simplified_file_matches_a_traditional_record_with_ost_glued_on(lib):
+    """The reported case: folder and album tag "Critical Transition Point OST
+    (相变临界OST)", saved translation for 相變臨界."""
+    folder = lib["root"] / "MSR" / "Critical Transition Point OST (相变临界OST)"
+    paths = [_flac(str(folder / f"0{i} - Track {i}.flac"), title=f"Track {i}",
+                   album="Critical Transition Point OST (相变临界OST)") for i in (1, 2)]
+    store.save_translation("album", "相變臨界", "Critical Phase Transition", user_edited=True)
+    preview = retro.apply_translation(lib["db"], "album", "相變臨界", folder=str(folder), dry_run=True)
+    assert len(preview["files"]) == 2
+    assert {f["new"] for f in preview["files"]} == {"Critical Phase Transition (相变临界) OST"}
+    assert [os.path.basename(f["to"]) for f in preview["folders"]] == ["Critical Phase Transition (相变临界) OST"]
+    done = retro.apply_translation(lib["db"], "album", "相變臨界", folder=str(folder))
+    assert done["written"] == 2 and done["renamed"] == 1 and done["errors"] == []
+    new_folder = lib["root"] / "MSR" / "Critical Phase Transition (相变临界) OST"
+    assert FLAC(str(new_folder / "01 - Track 1.flac"))["album"] == ["Critical Phase Transition (相变临界) OST"]
+    assert not folder.exists() and not os.path.exists(paths[0])
+    # and it is stable: nothing left to do
+    assert retro.apply_translation(lib["db"], "album", "相變臨界", folder=str(new_folder))["files"] == []
+
+
+def test_database_search_finds_the_other_script(lib):
+    path = _flac(str(lib["root"] / "MSR" / "A" / "01.flac"), title="t", album="Old Name (相变临界)")
+    lib["db"].add("MSR", "Old Name (相变临界)", "t", 1, path)
+    store.save_translation("album", "相變臨界", "Critical Phase Transition", user_edited=True)
+    data = retro.apply_translation(lib["db"], "album", "相變臨界", rename=False)
+    assert data["written"] == 1 and FLAC(path)["album"] == ["Critical Phase Transition (相变临界)"]

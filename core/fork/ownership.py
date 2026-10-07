@@ -30,7 +30,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.fork import artist_names, store, translate
-from core.fork.cjk import contains_cjk, split_name
+from core.fork.cjk import contains_cjk, fold, script_variants, split_name
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.ownership")
@@ -40,7 +40,8 @@ _LIKE_LIMIT = 25
 
 
 def _norm(text: Any) -> str:
-    return "".join(str(text or "").casefold().split())
+    # script-insensitive: 相變臨界 and 相变临界 are the same name
+    return fold(text)
 
 
 def artist_forms(artist: str) -> List[str]:
@@ -70,14 +71,16 @@ def _like_rows(db: Any, table: str, core: str) -> List[Tuple[str, str]]:
     """``(title, artist name)`` of library rows whose title contains ``core``."""
     if table not in ("tracks", "albums"):
         return []
-    pattern = "%" + core.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    patterns = ["%" + v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                for v in script_variants(core)]
+    where = " OR ".join("t.title LIKE ? ESCAPE '\\'" for _ in patterns)
     conn = None
     try:
         conn = db._get_connection()
         rows = conn.execute(
             f"SELECT DISTINCT t.title, a.name FROM {table} t JOIN artists a ON a.id = t.artist_id "  # noqa: S608 — table is whitelisted above
-            "WHERE t.title LIKE ? ESCAPE '\\' LIMIT ?",
-            (pattern, _LIKE_LIMIT),
+            f"WHERE ({where}) LIMIT ?",
+            (*patterns, _LIKE_LIMIT),
         ).fetchall()
         return [(str(r[0] or ""), str(r[1] or "")) for r in rows]
     except Exception as exc:

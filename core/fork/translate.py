@@ -111,7 +111,7 @@ def _usable(kind: str, core: str, row: Optional[Dict[str, object]]) -> Optional[
     危機合約滌墨作戰 — so the name gets a real translation instead."""
     if row and row.get("model") == "existing" and not row.get("user_edited") \
             and is_only_decoration(str(row.get("translated") or "")):
-        store.delete_translation(kind, core)
+        store.delete_translation(kind, str(row.get("original") or core))
         logger.info("Dropped decoration-only record for %s %r: %r", kind, core, row.get("translated"))
         return None
     return row
@@ -131,11 +131,11 @@ def purge_decoration_records() -> int:
 def lookup(kind: str, core: str, existing: str = "", hint: Optional[Dict[str, str]] = None,
            allow_llm: bool = True) -> str:
     """Bare translation of ``core`` from the cache, creating it if needed."""
-    row = _usable(kind, core, store.get_translation(kind, core))
+    row = _usable(kind, core, store.find_translation(kind, core))
     if row and row.get("translated"):
         return str(row["translated"])
     with _miss_lock:
-        row = _usable(kind, core, store.get_translation(kind, core))
+        row = _usable(kind, core, store.find_translation(kind, core))
         if row and row.get("translated"):
             return str(row["translated"])
         if existing:

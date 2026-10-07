@@ -19,7 +19,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.fork import store, tags, translate
-from core.fork.cjk import split_name
+from core.fork.cjk import fold, script_variants, split_name
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.retro")
@@ -30,7 +30,8 @@ _SIDECARS = (".lrc", ".txt", ".original.lrc", ".original.txt")
 
 
 def _norm(text: Any) -> str:
-    return "".join(str(text or "").casefold().split())
+    # script-insensitive: 相變臨界 and 相变临界 are the same name
+    return fold(text)
 
 
 def _like(text: str) -> str:
@@ -64,7 +65,10 @@ _TRACK_SQL = (
 
 def library_tracks(db: Any, kind: str, original: str) -> List[Dict[str, Any]]:
     column = "t.title" if kind == "title" else "al.title"
-    return _query(db, _TRACK_SQL.format(where=f"{column} LIKE ? ESCAPE '\\'"), (_like(original), _MAX_ROWS))
+    # the library may hold the name in the other Chinese script
+    variants = script_variants(original)
+    where = " OR ".join(f"{column} LIKE ? ESCAPE '\\'" for _ in variants)
+    return _query(db, _TRACK_SQL.format(where=f"({where})"), (*[_like(v) for v in variants], _MAX_ROWS))
 
 
 def _resolve(file_path: Any) -> Optional[str]:
@@ -116,7 +120,11 @@ def plan_file(path: str, kind: str, original: str) -> Optional[Dict[str, Any]]:
     new = translate.translate_name(kind, source, allow_llm=False)
     if not new or new == current:
         return None
-    return {"path": path, "field": field, "old": current, "new": new, "original": recorded or split_name(source)[0]}
+    # What to record as the original when the file has none: the name AND its
+    # decoration ("相变临界 OST"), so the next pass rebuilds the same result.
+    core, _existing, suffix = split_name(source)
+    return {"path": path, "field": field, "old": current, "new": new,
+            "original": recorded or f"{core} {suffix}".strip()}
 
 
 def _sanitize(name: str) -> str:
@@ -223,7 +231,7 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
 
     if kind not in _FIELD or not original:
         raise ValueError("kind and original are required")
-    row = store.get_translation(kind, original)
+    row = store.find_translation(kind, original)
     if not row:
         raise LookupError("No stored translation for this name")
 
@@ -431,7 +439,7 @@ def details(db: Any, kind: str, name: str) -> Dict[str, Any]:
         out["library_names"] = sorted({r["artist"] for r in rows})
     else:
         core = split_name(name)[0] or name
-        record = store.get_translation(kind, core)
+        record = store.find_translation(kind, core)
         if record:
             record = {**record, "display": translate.format_name(record["translated"], core)}
         out["record"] = record
