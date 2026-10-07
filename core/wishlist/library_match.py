@@ -297,3 +297,20 @@ def wishlist_row_requires_album(track) -> bool:
 
 __all__ = ["artist_names", "find_owned_match", "wishlist_row_requires_album",
            "ALBUM_SCOPED_SOURCE_TYPES"]
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The wishlist re-checks an ownership hit with a strict title/artist/album
+# comparison. A library row the fork renamed ("Nocturne (夜曲)" by Jay Chou for
+# 夜曲 by 周杰倫) fails that literally, so it is re-checked against the exact
+# name equivalences the fork knows. See core/fork/ownership.py and FORK.md.
+_upstream_strict_identity_matches = _strict_identity_matches
+
+
+def _strict_identity_matches(db_track: Any, track_name: str, artist_name: str,  # noqa: F811
+                             album: Optional[str], require_album: bool) -> bool:
+    if _upstream_strict_identity_matches(db_track, track_name, artist_name, album, require_album):
+        return True
+    from core.fork import hooks as _fork_hooks
+    return _fork_hooks.same_identity(db_track, track_name, artist_name, album, require_album,
+                                     _same_title, _same_artist)

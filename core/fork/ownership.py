@@ -183,3 +183,51 @@ def find_by_external_id(db: Any, track: Any, server_source: Optional[str] = None
         return None
     logger.info("Owned by external id (%s): %r", ", ".join(sorted(ids)), row.get("title"))
     return SimpleNamespace(**{k: row.get(k) for k in ("id", "title", "file_path", "album_id", "artist_id")})
+
+
+def names_equivalent(kind: str, source_name: str, library_name: str) -> bool:
+    """Whether ``library_name`` is how the fork (or an earlier translation
+    pass) wrote ``source_name``. Exact, never fuzzy:
+
+    * it is the name recorded for that original in ``fork_translations``, or
+    * it carries the same original inside it ("Night Song (夜曲)" for 夜曲)
+      with the same version decoration ("(Live)" must match "(Live)").
+    """
+    if not isinstance(source_name, str) or not isinstance(library_name, str):
+        return False
+    if _norm(source_name) == _norm(library_name):
+        return True
+    if not contains_cjk(source_name) and not contains_cjk(library_name):
+        return False
+    try:
+        if _norm(translate.translate_name(kind, source_name, allow_llm=False)) == _norm(library_name):
+            return True
+    except Exception as exc:
+        logger.debug("recorded name lookup failed for %r: %s", source_name, exc)
+    src_core, _src_existing, src_suffix = split_name(source_name)
+    lib_core, lib_existing, lib_suffix = split_name(library_name)
+    return bool(src_core and contains_cjk(src_core) and lib_existing
+                and _norm(src_core) == _norm(lib_core) and _norm(src_suffix) == _norm(lib_suffix))
+
+
+def same_identity(db_track: Any, track_name: str, artist_name: str, album: Optional[str],
+                  require_album: bool, same_title: Callable[..., bool],
+                  same_artist: Callable[[str, Any], bool]) -> bool:
+    """Strict "this library row IS the requested track" for a row whose names
+    the fork rewrote. Each of title / artist / album passes on upstream's own
+    comparison or on the exact equivalences above — nothing looser."""
+    lib_title = getattr(db_track, "title", None)
+    lib_album = getattr(db_track, "album_title", None)
+    if not lib_title:
+        return False
+    if not (same_title(track_name, lib_title, "", allow_subtitles=True)
+            or names_equivalent("title", track_name, lib_title)):
+        return False
+    if not any(same_artist(form, db_track) for form in artist_forms(artist_name)):
+        return False
+    if require_album:
+        if not (album and lib_album):
+            return False
+        if not (same_title(album, lib_album) or names_equivalent("album", album, lib_album)):
+            return False
+    return True

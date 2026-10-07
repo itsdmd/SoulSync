@@ -210,3 +210,19 @@ def remove_lyrics_backup(audio_path: Any) -> None:
             lyrics.remove_backups(str(audio_path))
     except Exception as exc:
         logger.debug("remove_lyrics_backup failed for %s: %s", audio_path, exc)
+
+
+def same_identity(db_track: Any, track_name: str, artist_name: str, album: Any, require_album: bool,
+                  same_title: Callable[..., bool], same_artist: Callable[[str, Any], bool]) -> bool:
+    """Fallback for upstream's strict identity check when the library row
+    carries fork-written names."""
+    if not _active():
+        return False
+    try:
+        from core.fork import ownership
+
+        return ownership.same_identity(db_track, track_name, artist_name, album, require_album,
+                                       same_title, same_artist)
+    except Exception as exc:
+        logger.warning("same_identity failed: %s", exc)
+        return False

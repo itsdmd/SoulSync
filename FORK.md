@@ -67,7 +67,11 @@ track again on every scan. The fork adds three exact checks
 
 2 and 3 wrap `check_track_exists`, `check_album_exists` and
 `check_album_exists_with_editions`, so wishlist, watchlist, discography
-completion and sync all benefit. They only run after upstream's own check
+completion and sync all benefit. The wishlist then re-checks a hit with a
+strict title/artist/album comparison; that check (`_strict_identity_matches`)
+is wrapped too and accepts the same exact equivalences, so a fulfilled wish is
+recognised and removed. Version decoration still has to agree: "夜曲 (Live)"
+is not "Nocturne (夜曲)". They only run after upstream's own check
 missed and a CJK name or an artist rule is involved.
 
 Limits: 3 needs the original in the name, so it does not help with a template
@@ -121,6 +125,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/repair_jobs/track_number_repair.py` | EOF wrapper: `_rename_to_basename` (same) |
 | `core/repair_worker.py`, `core/repair_jobs/unknown_artist_fixer.py` | 2 lines at each sidecar move (same) |
 | `core/downloads/master.py` | 7 lines: external-id ownership before a track is queued |
+| `core/wishlist/library_match.py` | EOF wrapper around `_strict_identity_matches` |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
 | `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
 | `webui/index.html` | one `<script>` tag for `fork-ui.js`, one `<link>` for `fork.css` |

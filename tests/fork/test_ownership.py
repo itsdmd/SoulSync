@@ -127,3 +127,56 @@ def test_real_database_methods_are_wrapped():
 
     assert MusicDatabase.check_track_exists.__name__ == "_fork_check_track_exists"
     assert MusicDatabase.check_album_exists_with_editions.__name__ == "_fork_check_album_exists_with_editions"
+
+
+# ── the wishlist's strict identity re-check ─────────────────────────────
+
+def _row(title, artist, album):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(title=title, artist_name=artist, track_artist=None, album_title=album,
+                           file_path="/music/x.flac")
+
+
+def _strict(row, title, artist, album, require_album=True):
+    from core.wishlist import library_match
+
+    return library_match._strict_identity_matches(row, title, artist, album, require_album)
+
+
+def test_strict_identity_accepts_a_row_the_fork_renamed(db):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    store.save_translation("title", "生命流", "Lifestream", model="m")
+    row = _row("Lifestream (生命流)", "Monster Siren Records", "Arknights OST (明日方舟)")
+    assert _strict(row, "生命流", "塞壬唱片-MSR", "明日方舟") is True
+
+
+def test_strict_identity_accepts_embedded_original_without_any_record(db):
+    store.save_artist_name("周杰倫", "Jay Chou", "manual")
+    row = _row("Night Song (夜曲)", "Jay Chou", "Chopin of November (十一月的蕭邦)")
+    assert _strict(row, "夜曲", "周杰倫", "十一月的蕭邦") is True
+
+
+def test_strict_identity_artist_rule_with_untranslated_title(db):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    row = _row("Renegade", "Monster Siren Records", "Renegade")
+    assert _strict(row, "Renegade", "塞壬唱片-MSR", "Renegade") is True
+
+
+def test_strict_identity_stays_strict(db):
+    store.save_artist_name("周杰倫", "Jay Chou", "manual")
+    # another artist's song with the same original title
+    assert _strict(_row("Nocturne (夜曲)", "Someone Else", "X (十一月的蕭邦)"), "夜曲", "周杰倫", "十一月的蕭邦") is False
+    # a different title that merely contains the original
+    assert _strict(_row("Serenade (小夜曲)", "Jay Chou", "X (十一月的蕭邦)"), "夜曲", "周杰倫", "十一月的蕭邦") is False
+    # a live recording is not the studio one, in either direction
+    assert _strict(_row("Nocturne (夜曲) (Live)", "Jay Chou", "X (十一月的蕭邦)"), "夜曲", "周杰倫", "十一月的蕭邦") is False
+    assert _strict(_row("Nocturne (夜曲)", "Jay Chou", "X (十一月的蕭邦)"), "夜曲 (Live)", "周杰倫", "十一月的蕭邦") is False
+    # right track, wrong album, when the wish names an album
+    assert _strict(_row("Nocturne (夜曲)", "Jay Chou", "Greatest Hits"), "夜曲", "周杰倫", "十一月的蕭邦") is False
+    assert _strict(_row("Nocturne (夜曲)", "Jay Chou", "Greatest Hits"), "夜曲", "周杰倫", "十一月的蕭邦", require_album=False) is True
+
+
+def test_strict_identity_leaves_ordinary_latin_mismatches_rejected(db):
+    assert _strict(_row("The Sun Maid", "Soul Asylum", "Grave Dancers Union"),
+                   "Runaway Train", "Soul Asylum", "Grave Dancers Union") is False
