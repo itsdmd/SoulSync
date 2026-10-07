@@ -82,6 +82,12 @@ a minute at a time and everything else behaves like upstream.
   at least 8 minutes whatever the configured timeout, every request uses the
   same context size (a different size makes Ollama reload the model), and
   output length is capped so a runaway answer ends quickly.
+- **Dropped requests.** gunicorn's default closes an idle connection after 2
+  seconds; a request sent at that instant is lost and Firefox reports
+  "NetworkError when attempting to fetch resource" (a POST is never re-sent by
+  the browser). `keepalive` is raised to 120s so the browser closes first, and
+  the fork's own requests are re-sent after such a failure (writes only when it
+  failed instantly, i.e. before the server could have started on it).
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -181,6 +187,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/wishlist/library_match.py` | EOF wrapper around `_strict_identity_matches` |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
 | `requirements.txt` | one appended dependency: `zhconv` |
+| `gunicorn.conf.py` | one appended setting: `keepalive = 120` |
 | `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
 | `webui/index.html` | `<script>` tags for `fork-ui.js` and `fork-album.js`, one `<link>` for `fork.css` |
 | `webui/src/routes/active-downloads/-ui/active-downloads-page.tsx` | search state, filtering, mounts the search box |

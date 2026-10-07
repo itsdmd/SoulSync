@@ -39,14 +39,37 @@
         return node;
     }
 
+
+    // The server closes an idle keep-alive connection after a couple of seconds.
+    // When the browser sends a request down a connection the server is closing
+    // at that instant, the request is lost: fetch() rejects with a bare network
+    // error ("NetworkError when attempting to fetch resource" in Firefox), and
+    // a POST is never re-sent automatically. Such a failure is immediate and
+    // means the server did not process anything, so it is safe to send again.
+    async function fetchWithRetry(url, options, repeatable) {
+        for (let attempt = 0; ; attempt++) {
+            const started = Date.now();
+            try {
+                return await fetch(url, Object.assign({}, options, { signal: new AbortController().signal }));
+            } catch (err) {
+                const instant = Date.now() - started < 1500;
+                // a read can always be repeated; a write only when it failed
+                // before the server could have started on it
+                if (attempt >= 2 || !(repeatable || instant)) throw err;
+                await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+            }
+        }
+    }
+
     async function api(path, body) {
-        // a signal opts the request out of the app's 2.5s GET sharing
-        // (fetch-dedupe.js), so a folder listing is never a stale one
-        const resp = await fetch(API + path, body ? {
+        // (the signal fetchWithRetry adds also opts the request out of the
+        // app's 2.5s GET sharing, so a folder listing is never a stale one)
+        // Everything here except applying tags only reads or is safe to repeat.
+        const resp = await fetchWithRetry(API + path, body ? {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-        } : { signal: new AbortController().signal });
+        } : {}, path !== '/tag-apply');
         let data = {};
         try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
         if (!resp.ok || data.success === false) throw new Error(data.error || `Request failed (${resp.status})`);
@@ -272,10 +295,34 @@
 
     // ── 3. auto-tag review ───────────────────────────────────────────────
 
+    // The dialog's checkboxes are remembered per browser, so a choice such as
+    // "don't translate with the model" holds for the next album too.
+    const TAGGER_OPTIONS_KEY = 'soulsync-fork.auto-tag.options';
+    const TAGGER_DEFAULTS = { applyRules: true, translate: true, semicolons: true, rename: false };
+
+    function loadTaggerOptions() {
+        const opts = Object.assign({}, TAGGER_DEFAULTS);
+        try {
+            const saved = JSON.parse(window.localStorage.getItem(TAGGER_OPTIONS_KEY) || '{}');
+            for (const key of Object.keys(TAGGER_DEFAULTS)) {
+                if (typeof saved[key] === 'boolean') opts[key] = saved[key];
+            }
+        } catch (_) { /* unreadable storage: defaults */ }
+        return opts;
+    }
+
+    function saveTaggerOptions(opts) {
+        try {
+            const out = {};
+            for (const key of Object.keys(TAGGER_DEFAULTS)) out[key] = !!opts[key];
+            window.localStorage.setItem(TAGGER_OPTIONS_KEY, JSON.stringify(out));
+        } catch (_) { /* storage blocked: the choice still holds for this dialog */ }
+    }
+
     function openTagger(state) {
         const process = getProcess(state.id);
         if (!process || !state.folder) return;
-        const opts = { applyRules: true, translate: true, semicolons: true, rename: false };
+        const opts = loadTaggerOptions();
         let closed = false;
         let translateRun = 0;      // bumps whenever a newer preview/translation supersedes the running one
         let albumEdited = false;
@@ -293,7 +340,7 @@
         const check = (label, key, help, onChange) => el('label', { class: 'fork-album-check', title: help }, [
             el('input', {
                 type: 'checkbox', checked: opts[key],
-                onchange: (e) => { opts[key] = e.target.checked; if (onChange) onChange(); },
+                onchange: (e) => { opts[key] = e.target.checked; saveTaggerOptions(opts); if (onChange) onChange(); },
             }),
             label,
         ]);
@@ -408,7 +455,14 @@
             try {
                 data = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules, semicolons: opts.semicolons }));
             } catch (err) {
-                body.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
+                // never a dead end: say what failed and offer another go
+                body.replaceChildren(el('div', { class: 'fork-album-note' }, [
+                    el('div', { text: `Could not prepare the tags: ${err.message}` }),
+                    el('button', {
+                        class: 'download-control-btn', type: 'button', text: 'Try again',
+                        style: 'margin-top:12px', onclick: () => load(),
+                    }),
+                ]));
                 return;
             }
             const mode = data.artist_mode || {};

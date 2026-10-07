@@ -48,16 +48,42 @@
         return node;
     }
 
+
+    // The server closes an idle keep-alive connection after a couple of seconds.
+    // When the browser sends a request down a connection the server is closing
+    // at that instant, the request is lost: fetch() rejects with a bare network
+    // error ("NetworkError when attempting to fetch resource" in Firefox), and
+    // a POST is never re-sent automatically. Such a failure is immediate and
+    // means the server did not process anything, so it is safe to send again.
+    async function fetchWithRetry(url, options, repeatable) {
+        for (let attempt = 0; ; attempt++) {
+            const started = Date.now();
+            try {
+                return await fetch(url, Object.assign({}, options, { signal: new AbortController().signal }));
+            } catch (err) {
+                const instant = Date.now() - started < 1500;
+                // a read can always be repeated; a write only when it failed
+                // before the server could have started on it
+                if (attempt >= 2 || !(repeatable || instant)) throw err;
+                await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+            }
+        }
+    }
+
     async function api(path, method, body) {
         // The app shares identical GETs made within 2.5s (fetch-dedupe.js). These
         // lists are re-read right after an edit, and a shared response would be
         // the list from BEFORE the edit — a request carrying a signal opts out.
-        const resp = await fetch(API + path, {
-            method: method || 'GET',
+        const verb = method || 'GET';
+        // reads, saves and previews can be repeated; the calls that change
+        // library files or start a run are only re-sent after an instant failure
+        const repeatable = verb === 'GET' || verb === 'PUT' || (body && body.dry_run === true)
+            || /\/(settings|test|preview|lookup)$/.test(path);
+        const resp = await fetchWithRetry(API + path, {
+            method: verb,
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body: body ? JSON.stringify(body) : undefined,
-            signal: new AbortController().signal,
-        });
+        }, repeatable);
         let data = {};
         try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
         if (!resp.ok || data.success === false) throw new Error(data.error || `Request failed (${resp.status})`);
