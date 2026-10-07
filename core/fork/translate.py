@@ -14,7 +14,7 @@ import threading
 from typing import Dict, Optional
 
 from core.fork import config, ollama, store
-from core.fork.cjk import contains_cjk, split_name
+from core.fork.cjk import contains_cjk, is_only_decoration, split_name
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.translate")
@@ -105,14 +105,37 @@ def format_name(translated: str, original: str, suffix: str = "") -> str:
     return f"{name} {suffix}".strip() if suffix else name
 
 
+def _usable(kind: str, core: str, row: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
+    """Drop a record that was lifted from the name itself ("existing") but is
+    only decoration — "Original Soundtrack" recorded as the translation of
+    危機合約滌墨作戰 — so the name gets a real translation instead."""
+    if row and row.get("model") == "existing" and not row.get("user_edited") \
+            and is_only_decoration(str(row.get("translated") or "")):
+        store.delete_translation(kind, core)
+        logger.info("Dropped decoration-only record for %s %r: %r", kind, core, row.get("translated"))
+        return None
+    return row
+
+
+def purge_decoration_records() -> int:
+    """Remove every such record; run when the term list changes and before the
+    translation list is shown."""
+    removed = 0
+    for kind in store.KINDS:
+        for item in store.list_translations(kind=kind, limit=100000)["items"]:
+            if _usable(kind, item["original"], item) is None:
+                removed += 1
+    return removed
+
+
 def lookup(kind: str, core: str, existing: str = "", hint: Optional[Dict[str, str]] = None,
            allow_llm: bool = True) -> str:
     """Bare translation of ``core`` from the cache, creating it if needed."""
-    row = store.get_translation(kind, core)
+    row = _usable(kind, core, store.get_translation(kind, core))
     if row and row.get("translated"):
         return str(row["translated"])
     with _miss_lock:
-        row = store.get_translation(kind, core)
+        row = _usable(kind, core, store.get_translation(kind, core))
         if row and row.get("translated"):
             return str(row["translated"])
         if existing:

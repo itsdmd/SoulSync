@@ -25,6 +25,12 @@ def _default_ollama_url() -> str:
     return os.environ.get("OLLAMA_URL") or "http://host.docker.internal:11434"
 
 
+def _default_keep_terms() -> str:
+    from core.fork.cjk import DEFAULT_KEEP_TERMS
+
+    return DEFAULT_KEEP_TERMS
+
+
 def defaults() -> Dict[str, Any]:
     return {
         "ollama": {
@@ -45,6 +51,9 @@ def defaults() -> Dict[str, Any]:
             "albums": True,
             "target_language": "English",
             "template": "{translated} ({original})",
+            # Terms that describe a release rather than name it (OST, EP,
+            # Remastered…): never taken for a translation, kept after the name.
+            "keep_terms": _default_keep_terms(),
             "apply_to_paths": True,
             "apply_to_tags": True,
             "write_original_tags": True,

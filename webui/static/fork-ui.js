@@ -26,7 +26,7 @@
     ];
 
     let settings = null;
-    let defaults = { artists: { detect: '' } };
+    let defaults = { artists: { detect: '' }, translate: { keep_terms: '' } };
     let tasks = {};
     let overlay = null;
 
@@ -184,6 +184,12 @@
             ]));
         }
 
+        const keepTerms = el('textarea', {
+            class: 'fork-input', rows: '4', 'aria-label': 'Terms that are not translations',
+            style: 'resize:vertical;font-family:inherit;line-height:1.45',
+            oninput: (e) => { settings.translate.keep_terms = e.target.value; },
+        });
+        keepTerms.value = settings.translate.keep_terms != null ? settings.translate.keep_terms : '';
         const naming = el('div', { class: 'fork-section' }, [
             el('h3', { text: 'Translated names' }),
             textRow('Name format', 'translate.template', '{translated} and {original}'),
@@ -199,6 +205,17 @@
                 ]),
             ]),
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
+            el('div', { class: 'fork-row', style: 'align-items:flex-start' }, [
+                el('label', { text: 'Terms that are not translations', style: 'padding-top:7px' }),
+                keepTerms,
+                el('button', {
+                    class: 'fork-btn', type: 'button', text: 'Defaults', title: 'Restore the default list',
+                    onclick: () => { settings.translate.keep_terms = defaults.translate.keep_terms; keepTerms.value = defaults.translate.keep_terms; },
+                }),
+            ]),
+            el('p', { class: 'fork-note', style: 'margin:4px 0 0', text:
+                'Words that describe a release rather than name it, separated by commas. In “危機合約滌墨作戰 (Original Soundtrack)” the bracket is kept as it is and only the name is translated, '
+                + 'instead of “Original Soundtrack” being taken for the translation. Whole words only, any letter case; a four-digit year always counts.' }),
         ]);
 
         // Artists: separate tags and a chosen separator are mutually exclusive —

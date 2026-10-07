@@ -45,6 +45,10 @@ def get_settings():
 def save_settings():
     settings = config.update(_body())
     ollama.reset_cooldown()
+    try:
+        translate.purge_decoration_records()   # the term list may have changed
+    except Exception as exc:
+        logger.debug("purge after settings save failed: %s", exc)
     return jsonify(success=True, settings=settings)
 
 
@@ -78,6 +82,10 @@ def test_model():
 @bp.route("/api/fork/translations", methods=["GET"])
 @admin_only
 def list_translations():
+    try:
+        translate.purge_decoration_records()
+    except Exception as exc:
+        logger.debug("purge before listing failed: %s", exc)
     data = store.list_translations(
         kind=request.args.get("kind") or None,
         search=(request.args.get("search") or "").strip(),

@@ -41,22 +41,83 @@ def contains_cjk(value: object) -> bool:
     return False
 
 
-# Bracketed text that describes the recording rather than naming it. Kept
-# outside the "(original)" part of a translated name.
-_VERSION_WORDS = (
-    r"live|remaster(?:ed)?|remix|mix|ver\.?|version|edit|instrumental|inst\.?|"
-    r"acoustic|demo|deluxe|bonus|karaoke|off\s*vocal|tv\s*size|short|full|"
-    r"feat\.?|ft\.?|featuring|with|ost|cover|single|album|ep|mono|stereo|"
-    r"explicit|clean|reprise|interlude|intro|outro|skit|piano|orchestra|"
-    r"\d{4}"
+# Terms that DESCRIBE a release or recording rather than name it. A bracket
+# holding one of these next to a CJK name — "危機合約滌墨作戰 (Original
+# Soundtrack)", "夜曲 (Live)", "夜曲 - 2019 Remaster" — is decoration: it is
+# never mistaken for the name's translation, and is kept as written after the
+# translated name. Editable in LLM & Tagging → Translated names; this is the
+# default list. A four-digit year always counts.
+DEFAULT_KEEP_TERMS = (
+    "OST, Original Soundtrack, Original Sound Track, Soundtrack, Sound Track, Original Score, "
+    "Original Game Soundtrack, Original Motion Picture Soundtrack, Music From, BGM, "
+    "EP, Single, Album, LP, Mini Album, Maxi Single, Compilation, Best Of, Greatest Hits, Collection, "
+    "Remaster, Remastered, Remix, Remixed, Mix, Mixed, Edit, Radio Edit, Version, Ver, Ver., "
+    "Deluxe, Deluxe Edition, Edition, Expanded, Extended, Anniversary, Limited, Collector's, Bonus, Bonus Track, "
+    "Live, Unplugged, Acoustic, Demo, Instrumental, Inst, Inst., Karaoke, Off Vocal, A Cappella, Acapella, "
+    "TV Size, Game Size, Movie Size, Short, Short Ver, Full, Full Ver, Full Size, "
+    "Feat, Feat., Ft, Ft., Featuring, With, Cover, Self Cover, Re-recorded, Rerecorded, "
+    "Mono, Stereo, Explicit, Clean, Reprise, Interlude, Intro, Outro, Skit, Piano, Orchestra, Orchestral, "
+    "CD, Disc, Disk, Vol, Vol., Volume, Digital"
 )
-_VERSION_RE = re.compile(rf"(?i)(?<![a-z])(?:{_VERSION_WORDS})(?![a-z])")
+
 _TRAILING_GROUP_RE = re.compile(r"^(?P<head>.*\S)\s*(?P<group>[(\[（【](?P<inner>[^()\[\]（）【】]+)[)\]）】])\s*$")
 _TRAILING_DASH_RE = re.compile(r"^(?P<head>.*\S)\s+(?P<group>[-–—]\s+(?P<inner>[^-–—]+))$")
 
+_terms_cache: dict = {}
+
+
+def keep_terms(raw: object = None) -> list:
+    """The configured terms (comma- or line-separated), or the defaults."""
+    if raw is None:
+        try:
+            from core.fork import config
+
+            raw = config.get("translate.keep_terms")
+        except Exception:
+            raw = None
+    if raw is None:
+        raw = DEFAULT_KEEP_TERMS
+    out = []
+    for term in re.split(r"[,\n]+", str(raw)):
+        term = " ".join(term.split())
+        if term and term.casefold() not in {t.casefold() for t in out}:
+            out.append(term)
+    return out
+
+
+def _terms_regex(raw: object = None) -> "re.Pattern[str]":
+    terms = keep_terms(raw)
+    key = "\x1f".join(terms)
+    cached = _terms_cache.get(key)
+    if cached is None:
+        # whole words/phrases only ("EP" must not match inside "Deep"); spaces
+        # inside a phrase may be any whitespace or a hyphen ("Re-recorded")
+        parts = [r"[\s\-]*".join(re.escape(word) for word in re.split(r"[\s\-]+", term) if word)
+                 for term in sorted(terms, key=len, reverse=True)]
+        cached = re.compile(r"(?i)(?<![a-z0-9])(?:" + "|".join(parts + [r"\d{4}"]) + r")(?![a-z0-9])")
+        if len(_terms_cache) > 20:
+            _terms_cache.clear()
+        _terms_cache[key] = cached
+    return cached
+
+
+def is_decoration(text: str) -> bool:
+    """Whether ``text`` is release/recording decoration rather than a name."""
+    return bool(text) and not contains_cjk(text) and bool(_terms_regex().search(text))
+
+
+def is_only_decoration(text: str) -> bool:
+    """Stricter: ``text`` consists of nothing BUT such terms ("Original
+    Soundtrack", "Deluxe Edition 2019"), with no other word in it. "Arknights
+    OST" is not — that is a title that happens to contain a term."""
+    if not text or contains_cjk(text):
+        return False
+    rest = _terms_regex().sub(" ", text)
+    return rest != text and not any(ch.isalnum() for ch in rest)
+
 
 def _is_version_text(inner: str) -> bool:
-    return not contains_cjk(inner) and bool(_VERSION_RE.search(inner))
+    return is_decoration(inner)
 
 
 def split_name(value: str) -> Tuple[str, str, str]:
@@ -86,6 +147,15 @@ def split_name(value: str) -> Tuple[str, str, str]:
         if head_cjk and not inner_cjk and re.search(r"[A-Za-z]{2}", inner):
             core, existing = head, inner
         elif inner_cjk and not head_cjk and re.search(r"[A-Za-z]{2}", head):
-            core, existing = inner, head
+            if is_only_decoration(head):
+                # "Original Soundtrack (危機合約滌墨作戰)" — a name an earlier
+                # mis-split produced: the bracket is the real name, the front
+                # is decoration, never its translation. The front of this form
+                # is normally a real translation, so it has to be NOTHING but
+                # terms: "Arknights OST (明日方舟)" stays a translation.
+                core = inner
+                suffixes.insert(0, f"({head})")
+            else:
+                core, existing = inner, head
 
     return core, existing, " ".join(suffixes)

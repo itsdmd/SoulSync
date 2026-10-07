@@ -74,3 +74,77 @@ def test_invalid_model_output_is_retried_then_given_up(llm):
 def test_model_outage_leaves_the_name_unchanged(llm):
     llm.replies = [ollama.OllamaError("down")]
     assert translate.translate_name("title", "夜曲") == "夜曲"
+
+
+# ── terms that describe a release rather than name it ───────────────────
+
+def test_original_soundtrack_is_decoration_not_the_translation(llm):
+    assert split_name("危機合約滌墨作戰 (Original Soundtrack)") == ("危機合約滌墨作戰", "", "(Original Soundtrack)")
+    llm.replies = [_reply("Contingency Contract: Ink Wash Operation")]
+    assert translate.translate_name("album", "危機合約滌墨作戰 (Original Soundtrack)") == \
+        "Contingency Contract: Ink Wash Operation (危機合約滌墨作戰) (Original Soundtrack)"
+    assert len(llm.calls) == 1                       # the model was asked for a real translation
+    assert llm.calls[0][1]["items"][0]["original"] == "危機合約滌墨作戰"
+
+
+def test_default_terms_cover_common_release_decoration():
+    for bracket in ("OST", "EP", "Remastered", "2019 Remaster", "Deluxe Edition", "Original Game Soundtrack",
+                    "TV Size", "Instrumental", "feat. Lara", "Live at Budokan", "Vol. 2", "Bonus Track",
+                    "Re-recorded", "rerecorded", "A Cappella", "ost", "Mini Album", "2005"):
+        assert split_name(f"夜曲 ({bracket})") == ("夜曲", "", f"({bracket})"), bracket
+    assert split_name("夜曲 - Original Soundtrack") == ("夜曲", "", "- Original Soundtrack")
+    assert split_name("夜曲 [OST] (Deluxe)") == ("夜曲", "", "[OST] (Deluxe)")
+
+
+def test_real_translations_are_still_recognised():
+    # whole words only: "Deep" contains EP, "Mixtures" contains Mix, "Olive" contains Live
+    for name in ("Nocturne", "Deep Sleep", "Mixtures of Night", "Olive Garden", "Cruel Angel's Thesis"):
+        assert split_name(f"夜曲 ({name})") == ("夜曲", name, ""), name
+
+
+def test_user_can_edit_the_term_list(fork_env):
+    fork_env.set("fork.translate.keep_terms", "Drama CD,  Character Song\nOST")
+    assert split_name("夜曲 (Drama CD)") == ("夜曲", "", "(Drama CD)")
+    assert split_name("夜曲 (Character   Song)") == ("夜曲", "", "(Character   Song)")
+    assert split_name("夜曲 (OST)") == ("夜曲", "", "(OST)")
+    # removed from the list: now read as a translation again
+    assert split_name("夜曲 (Remastered)") == ("夜曲", "Remastered", "")
+    assert split_name("夜曲 (2019)") == ("夜曲", "", "(2019)")      # a year always counts
+    fork_env.set("fork.translate.keep_terms", "")
+    assert split_name("夜曲 (OST)") == ("夜曲", "OST", "")
+
+
+def test_a_wrongly_recorded_decoration_is_dropped_and_retranslated(llm):
+    # what the old behaviour stored
+    store.save_translation("album", "危機合約滌墨作戰", "Original Soundtrack", model="existing")
+    llm.replies = [_reply("Contingency Contract")]
+    assert translate.translate_name("album", "危機合約滌墨作戰 (Original Soundtrack)") == \
+        "Contingency Contract (危機合約滌墨作戰) (Original Soundtrack)"
+    assert store.get_translation("album", "危機合約滌墨作戰")["translated"] == "Contingency Contract"
+
+
+def test_purge_removes_only_auto_lifted_decoration_records():
+    store.save_translation("album", "甲", "Original Soundtrack", model="existing")
+    store.save_translation("album", "乙", "Nocturne", model="existing")          # a real lifted translation
+    store.save_translation("album", "丙", "Live", user_edited=True)              # the user chose it
+    store.save_translation("title", "丁", "Remix", model="qwen3.5:9b")           # the model said so
+    assert translate.purge_decoration_records() == 1
+    assert store.get_translation("album", "甲") is None
+    assert all(store.get_translation(k, o) for k, o in (("album", "乙"), ("album", "丙"), ("title", "丁")))
+
+
+def test_a_name_the_old_behaviour_wrote_is_read_back_correctly(llm):
+    """"Original Soundtrack (危機合約滌墨作戰)" on an already-tagged file."""
+    assert split_name("Original Soundtrack (危機合約滌墨作戰)") == ("危機合約滌墨作戰", "", "(Original Soundtrack)")
+    store.save_translation("album", "危機合約滌墨作戰", "Contingency Contract", user_edited=True)
+    assert translate.translate_name("album", "Original Soundtrack (危機合約滌墨作戰)", allow_llm=False) == \
+        "Contingency Contract (危機合約滌墨作戰) (Original Soundtrack)"
+
+
+def test_a_title_that_merely_contains_a_term_is_still_a_translation():
+    # our own "<translation> (<original>)" form: the front is a translation
+    assert split_name("Arknights OST (明日方舟)") == ("明日方舟", "Arknights OST", "")
+    assert split_name("Live Forever (永生)") == ("永生", "Live Forever", "")
+    # and such a record is not purged
+    store.save_translation("album", "明日方舟", "Arknights OST", model="existing")
+    assert translate.purge_decoration_records() == 0
