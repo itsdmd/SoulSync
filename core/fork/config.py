@@ -81,6 +81,19 @@ def defaults() -> Dict[str, Any]:
             # on top of the built-in , ; & / + feat. ft. featuring with vs. x
             "detect": "、 ， ； ／ ＆ ＋ ｜ | • ・ × ✕ ✖ ｘ",
         },
+        "albums": {
+            # After tagging a file, make it and the tracks already in its album
+            # folder agree on the MusicBrainz release id, so the media server
+            # does not show one album as two.
+            "keep_ids_consistent": True,
+        },
+        "youtube_audio": {
+            # Also write every downloaded YouTube video as audio to the import folder.
+            "enabled": False,
+            "codec": "opus",      # opus | mp3 | aac | flac
+            "bitrate": 256,       # kbps; ignored for flac
+            "keep_video": True,
+        },
         "import": {
             # The automatic import watcher moves/renames only, leaving file
             # metadata untouched (manual imports have their own switch).

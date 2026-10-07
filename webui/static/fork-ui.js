@@ -20,6 +20,8 @@
         ['lyrics.enabled', 'Translate CJK lyrics', ''],
         ['import.rename_only_auto', 'Automatic import: rename only',
             'The import watcher moves and renames files without changing their tags, artwork or audio. Also on the Import page settings.'],
+        ['albums.keep_ids_consistent', 'Keep album ids consistent within an album',
+            'After tagging a track, copies the MusicBrainz release id between it and the tracks already in its album folder, so your media server does not show one album as two.'],
         ['artist_names.enabled', 'Apply artist name rules', ''],
         ['artist_names.auto_lookup', 'Look up CJK artist names on MusicBrainz',
             'Uses the artist\'s official alias. No model involved; rules you add by hand always win.'],
@@ -291,6 +293,43 @@
                 + 'A name your rules or MusicBrainz know as one artist is never split.' }),
         ]);
 
+        // YouTube video -> audio in the import folder
+        settings.youtube_audio = settings.youtube_audio || {};
+        const yt = settings.youtube_audio;
+        const ytBitrate = el('input', {
+            class: 'fork-input', type: 'number', min: '32', max: '512', style: 'flex:0 0 110px',
+            'aria-label': 'Audio bitrate', value: yt.bitrate != null ? yt.bitrate : 256,
+            oninput: (e) => { yt.bitrate = e.target.value; },
+        });
+        const ytHelp = el('span', { class: 'fork-help' });
+        const syncYt = () => {
+            ytBitrate.disabled = yt.codec === 'flac';
+            ytHelp.textContent = yt.codec === 'flac' ? 'Lossless: no bitrate.' : 'kbps. Audio already in this format is copied, not re-encoded.';
+        };
+        const youtube = el('div', { class: 'fork-section' }, [
+            el('h3', { text: 'YouTube videos to audio' }),
+            el('label', { class: 'fork-check' }, [
+                el('input', { type: 'checkbox', checked: !!yt.enabled, onchange: (e) => { yt.enabled = e.target.checked; } }),
+                el('span', {}, ['Also save downloaded YouTube videos as audio', el('small', {
+                    text: 'Every YouTube video SoulSync downloads is also written to your import folder as “Channel - Title”, ready to identify and import.',
+                })]),
+            ]),
+            el('div', { class: 'fork-row' }, [
+                el('label', { text: 'Audio format' }),
+                el('select', {
+                    class: 'fork-select', style: 'flex:0 0 160px',
+                    onchange: (e) => { yt.codec = e.target.value; syncYt(); },
+                }, [['opus', 'Opus'], ['mp3', 'MP3'], ['aac', 'AAC (.m4a)'], ['flac', 'FLAC']]
+                    .map(([value, text]) => el('option', { value, text, selected: (yt.codec || 'opus') === value }))),
+                ytBitrate, ytHelp,
+            ]),
+            el('label', { class: 'fork-check' }, [
+                el('input', { type: 'checkbox', checked: yt.keep_video !== false, onchange: (e) => { yt.keep_video = e.target.checked; } }),
+                el('span', {}, ['Keep the video', el('small', { text: 'Off: the video file is deleted once its audio has been written.' })]),
+            ]),
+        ]);
+        syncYt();
+
         const features = el('div', { class: 'fork-section' }, [el('h3', { text: 'Features' })]);
         for (const [path, label, help] of TOGGLES) {
             features.append(el('label', { class: 'fork-check' }, [
@@ -302,7 +341,7 @@
             ]));
         }
 
-        body.replaceChildren(connection, models, naming, artists, features);
+        body.replaceChildren(connection, models, naming, artists, youtube, features);
         api('/models?url=' + encodeURIComponent(settings.ollama.url))
             .then((data) => modelList.replaceChildren(...data.models.map((m) => el('option', { value: m }))))
             .catch(() => { /* shown when the user presses Check */ });

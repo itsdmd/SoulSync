@@ -24,6 +24,8 @@ All of it is configured from **LLM & Tagging** in the sidebar (under Settings).
 | 10 | Terms that are not translations | An editable list (LLM & Tagging → Translated names) of words that describe a release rather than name it: OST, Original Soundtrack, EP, Remastered, Deluxe Edition, Live, TV Size, feat., … In `危機合約滌墨作戰 (Original Soundtrack)` the bracket is kept as written and only the name is translated, instead of the bracket being taken for the translation. Whole words/phrases, any case; a four-digit year always counts. Records wrongly lifted from such a bracket are dropped automatically so the name gets translated properly. |
 | 11 | Tool: Auto Translate | (Tools page.) Scans the library for album and song names still untranslated, gathers the distinct ones, and translates them several per model request (Batch Size, default 10) so the model loads once and stays warm. Names with a saved translation are not re-sent. Dry run (default) creates one finding per name with the proposal; approving it applies whatever is saved by then. Settings: Translate Albums / Titles, Batch Size, Rename Files, Dry Run. |
 | 12 | Tool: Album Volume Grouping | (Tools page.) Finds albums by one artist that differ only by a volume marker (Vol./Volume, Pt./Part, Disc/CD + number or Roman numeral, 第N卷, 卷N) and makes each set one album: common album name, volume = disc number, files optionally moved to `<album>/Disc N/`. Needs at least two volumes with distinct numbers. A source's "…, Vol. 2" album still counts as owned afterwards. Settings: Move Files, Dry Run. |
+| 13 | Album ids stay consistent | After a file is tagged, it and the tracks already in its album folder (disc sub-folders included, same album name only) are made to agree on `MUSICBRAINZ_ALBUMID` / release-group id: whichever side lacks it gets it. Stops Navidrome showing one album as two when the MusicBrainz lookup worked for only some tracks. Two different ids in one folder are left for Tools → Album Tag Consistency. On by default (LLM & Tagging → Features). |
+| 14 | YouTube videos to audio | Optional (off by default): every YouTube video SoulSync downloads is also written to the import folder as `Channel - Title.<ext>`, tagged with title, artist and date. Opus 256 kbps by default; MP3, AAC or FLAC selectable. Audio already in the chosen codec is copied rather than re-encoded. The video is kept unless switched off. |
 | 5 | Ownership across renamed names | "Already in the library?" no longer depends on a source name fuzzy-matching a translated library name. See below. |
 
 Ollama is reached at `OLLAMA_URL` (overridable in the panel). In the Portainer
@@ -113,7 +115,8 @@ New code lives in files upstream does not have:
 ```
 core/fork/            config, ollama client, sqlite store, translate, lyrics,
                       artist_names, artist_format, comma_split, retro, search_terms, tags,
-                      ownership, album_tagging, jobs, hooks
+                      ownership, album_tagging, album_identity, youtube_audio,
+                      jobs, hooks
 core/repair_jobs/fork_tools.py   the two fork job classes (the framework looks for jobs here)
 api/fork.py           /api/fork/* endpoints
 webui/static/fork-ui.js                         the LLM & Tagging panel
@@ -157,6 +160,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/repair_worker.py` | EOF wrapper around `_fix_comma_artist_split` (store the split per the job's strategy) |
 | `core/repair_jobs/comma_artist_splitter.py` | EOF block: two extra settings, their options and help text |
 | `core/repair_jobs/__init__.py` | one line: registers `core.repair_jobs.fork_tools` |
+| `core/video/youtube_download.py` | EOF wrapper around `process_youtube_download` (audio copy to the import folder) |
 | `core/repair_worker.py` | EOF block: finding labels, job family, fix handlers for the fork's tools |
 | `webui/src/routes/tools/-tools.groups.ts` | two finding blurbs |
 | `webui/src/routes/tools/-ui/operations.tsx` | select `disabled`/`title` from `-tools.fork.ts` (separator lock) |

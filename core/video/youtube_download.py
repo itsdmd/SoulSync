@@ -888,3 +888,19 @@ __all__ = [
     "start_next_queued", "requeue_orphaned_youtube", "recover_and_pump",
     "quality_override_from_download",
 ]
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Optionally also write each finished YouTube video as audio to the music
+# import folder (off by default). See core/fork/youtube_audio.py and FORK.md.
+_upstream_process_youtube_download = process_youtube_download
+
+
+def process_youtube_download(dl, **kwargs):  # noqa: F811
+    result = _upstream_process_youtube_download(dl, **kwargs)
+    try:
+        from core.fork import hooks as _fork_hooks
+        _fork_hooks.after_youtube_download(result, dl)
+    except Exception:   # noqa: BLE001 - never disturb the video pipeline
+        logger.exception("fork youtube-audio hook failed")
+    return result

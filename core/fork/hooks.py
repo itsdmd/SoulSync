@@ -106,6 +106,13 @@ def after_metadata_enhanced(file_path: str, context: Optional[Dict[str, Any]] = 
         from core.fork import tags
 
         tags.apply_to_file(file_path)
+        try:
+            from core.fork import album_identity
+
+            final = context.get("_final_processed_path") if isinstance(context, dict) else None
+            album_identity.harmonize(file_path, final)
+        except Exception as exc:
+            logger.warning("album id harmonize failed for %s: %s", file_path, exc)
     except Exception as exc:
         logger.warning("after_metadata_enhanced failed for %s: %s", file_path, exc)
 
@@ -257,3 +264,19 @@ def comma_split_after(worker: Any, details: Any, before: Any, result: Any) -> An
     except Exception as exc:
         logger.warning("comma_split_after failed: %s", exc)
         return result
+
+
+# ── YouTube video -> audio in the import folder ─────────────────────────
+
+def after_youtube_download(result: Any, dl: Any) -> None:
+    if not _active():
+        return
+    try:
+        if not isinstance(result, dict) or result.get("status") != "completed" or not result.get("dest_path"):
+            return
+        from core.fork import youtube_audio
+        from core.video.youtube_download import youtube_fields_from_download
+
+        youtube_audio.after_download(result["dest_path"], youtube_fields_from_download(dl or {}))
+    except Exception as exc:
+        logger.warning("after_youtube_download failed: %s", exc)
