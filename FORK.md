@@ -18,6 +18,7 @@ All of it is configured from **LLM & Tagging** in the sidebar (under Settings).
 | 3 | Discography: hide owned | "Hide owned" in the Download Discography dialog; owned releases are also shown as owned and left unchecked. |
 | 4 | Import: rename only | The file is moved and renamed to the path format of the release it was matched to, and nothing inside the file changes: no tag rewrite, artwork, lyrics embed, ReplayGain or conversion. Manual imports: the switch in the Import page header. Automatic watcher: "Rename only" in the Import page's settings (gear). |
 | 6 | Downloads page | Batches are full-width rows instead of a card grid, with a search box that filters by album/batch name, song title or artist (every word must match, any order; case and accents ignored). A batch found by one of its songs opens and shows just the matching songs. |
+| 7 | Album pop-up | (Library → artist → album.) Opening an album only checks the library and shows Found/Missing per track; nothing is searched or downloaded until **Download missing** is pressed, and owned tracks start unticked. A **Local files** bar shows the folder holding the album and lets you pick another. **Auto-tag…** matches that folder's files to the album's tracks (title incl. original/translation equivalence and file name, track position, duration), and shows an editable proposal before writing. Options: use artist rules + translations (on), rename/move to the path template (off). Writes source ids and `SOULSYNC_ORIGINAL_*` too; other tags are left alone. |
 | 5 | Ownership across renamed names | "Already in the library?" no longer depends on a source name fuzzy-matching a translated library name. See below. |
 
 Ollama is reached at `OLLAMA_URL` (overridable in the panel). In the Portainer
@@ -41,6 +42,10 @@ a minute at a time and everything else behaves like upstream.
   files, it needs a `move_lyrics_backup(src, dst)` call too; a backup that does
   get stranded is removed by the Empty Folder Cleaner once its folder has no
   audio left.
+- **After auto-tagging**, the media server has to rescan and SoulSync has to
+  refresh its library before discography checks reflect the new tags; the
+  tagger changes files, not SoulSync's database (except the path, when it
+  moves a file).
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -85,10 +90,11 @@ New code lives in files upstream does not have:
 
 ```
 core/fork/            config, ollama client, sqlite store, translate, lyrics,
-                      artist_names, search_terms, tags, ownership, hooks
+                      artist_names, search_terms, tags, ownership, album_tagging, hooks
 api/fork.py           /api/fork/* endpoints
 webui/static/fork-ui.js                         the LLM & Tagging panel
-webui/static/fork.css                           style overrides (loaded last): Downloads rows, search box
+webui/static/fork.css                           style overrides (loaded last): Downloads rows, search box, album pop-up
+webui/static/fork-album.js                      album pop-up: library check, folder picker, auto-tag (wraps the vanilla opener; no upstream edit)
 webui/src/routes/active-downloads/-adl.fork-search.ts, -ui/adl-search.tsx
 webui/src/routes/import/-import.fork.ts         rename-only preference
 webui/src/routes/import/-ui/rename-only-toggle.tsx
@@ -128,7 +134,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/wishlist/library_match.py` | EOF wrapper around `_strict_identity_matches` |
 | `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
 | `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
-| `webui/index.html` | one `<script>` tag for `fork-ui.js`, one `<link>` for `fork.css` |
+| `webui/index.html` | `<script>` tags for `fork-ui.js` and `fork-album.js`, one `<link>` for `fork.css` |
 | `webui/src/routes/active-downloads/-ui/active-downloads-page.tsx` | search state, filtering, mounts the search box |
 | `webui/src/routes/active-downloads/-ui/adl-groups.tsx` | optional `searching` prop (unfold matches) |
 | `webui/src/routes/artist-detail/-artist-detail.discography-modal.ts` | ownership fallback, `hideOwned` filter |

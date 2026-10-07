@@ -1,0 +1,408 @@
+// fork (itsdmd/SoulSync): additions to the album pop-up (the dialog that opens
+// when you pick an album from an artist's discography).
+//
+//  1. Opening an album only CHECKS the library: each track shows Found/Missing
+//     straight away. Nothing is searched or downloaded until "Download missing"
+//     (upstream's "Begin Analysis", renamed) is pressed.
+//  2. A "Local files" bar shows the folder SoulSync thinks holds the album and
+//     lets you pick another one.
+//  3. "Auto-tag…" matches the files in that folder to the album's tracks and
+//     proposes tags you can edit before anything is written.
+//
+// Self-contained: wraps window.openDownloadMissingModalForArtistAlbum and adds
+// its own elements. Backed by api/fork.py (/api/fork/album/*). See FORK.md.
+(function () {
+    'use strict';
+
+    const API = '/api/fork/album';
+    const FIELDS = [
+        ['title', 'Title', 3],
+        ['artist', 'Artist', 2],
+        ['albumartist', 'Album artist', 2],
+        ['track_number', '#', 0],
+        ['disc_number', 'Disc', 0],
+    ];
+
+    const toast = (msg, type) => (window.showToast ? window.showToast(msg, type || 'success') : console.log(msg));
+
+    function el(tag, attrs, children) {
+        const node = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs || {})) {
+            if (k === 'class') node.className = v;
+            else if (k === 'text') node.textContent = v;
+            else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+            else if (v !== false && v != null) node.setAttribute(k, v === true ? '' : v);
+        }
+        for (const child of [].concat(children || [])) {
+            if (child != null) node.append(child);
+        }
+        return node;
+    }
+
+    async function api(path, body) {
+        const resp = await fetch(API + path, body ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        } : undefined);
+        let data = {};
+        try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
+        if (!resp.ok || data.success === false) throw new Error(data.error || `Request failed (${resp.status})`);
+        return data;
+    }
+
+    function getProcess(id) {
+        try {
+            // eslint-disable-next-line no-undef
+            return typeof activeDownloadProcesses !== 'undefined' ? activeDownloadProcesses[id] : null;
+        } catch (_) { return null; }
+    }
+
+    function payload(process) {
+        return {
+            album: process.album || {},
+            artist: process.artist || {},
+            tracks: process.tracks || [],
+            source: process.source || (process.artist && process.artist.source) || '',
+        };
+    }
+
+    // ── 1. library check on open ─────────────────────────────────────────
+
+    async function runCheck(id, state) {
+        const process = getProcess(id);
+        if (!process || process.status !== 'idle') return;
+        const label = document.getElementById(`analysis-progress-text-${id}`);
+        if (label) label.textContent = 'Checking library…';
+        try {
+            const data = await api('/check', payload(process));
+            // a download run started meanwhile owns these cells now
+            if ((getProcess(id) || {}).status !== 'idle') return;
+            for (const row of data.tracks) {
+                const cell = document.getElementById(`match-${id}-${row.index}`);
+                if (!cell) continue;
+                cell.textContent = row.found ? '✅ Found' : '❌ Missing';
+                cell.className = `track-match-status ${row.found ? 'match-found' : 'match-missing'}`;
+                cell.title = row.found ? (row.file || row.library_title || '') : '';
+                // leave owned tracks unticked so "Download missing" means missing
+                const box = document.querySelector(`#download-tracks-tbody-${id} .track-select-cb[data-track-index="${row.index}"]`);
+                if (box && row.found) box.checked = false;
+            }
+            if (typeof window.updateTrackSelectionCount === 'function') window.updateTrackSelectionCount(id);
+            if (label) label.textContent = `${data.found} of ${data.total} in library`;
+            const fill = document.getElementById(`analysis-progress-fill-${id}`);
+            if (fill) fill.style.width = '100%';
+            if (!state.folderChosen) setFolder(state, data.folder || '');
+        } catch (err) {
+            if (label) label.textContent = 'Library check failed';
+            console.warn('[fork] album check failed:', err);
+        }
+    }
+
+    // ── 2. local files bar ───────────────────────────────────────────────
+
+    function setFolder(state, folder) {
+        state.folder = folder;
+        state.pathEl.textContent = folder || 'No folder found for this album in your library';
+        state.pathEl.title = folder;
+        state.pathEl.classList.toggle('fork-album-none', !folder);
+        state.tagBtn.disabled = !folder;
+    }
+
+    function addBar(id, modal) {
+        const section = modal.querySelector('.download-tracks-section');
+        if (!section || modal.querySelector('.fork-album-bar')) return null;
+        const state = { id, folder: '', folderChosen: false };
+        state.pathEl = el('span', { class: 'fork-album-path fork-album-none', text: 'Looking for this album in your library…' });
+        state.tagBtn = el('button', {
+            class: 'download-control-btn', type: 'button', text: 'Auto-tag…', disabled: true,
+            title: 'Match the files in this folder to the album and review the tags before writing them',
+            onclick: () => openTagger(state),
+        });
+        const bar = el('div', { class: 'fork-album-bar' }, [
+            el('span', { class: 'fork-album-label', text: 'Local files' }),
+            state.pathEl,
+            el('button', {
+                class: 'download-control-btn secondary', type: 'button', text: 'Change…',
+                title: 'Pick the folder that holds this album',
+                onclick: () => openBrowser(state.folder, (picked) => {
+                    state.folderChosen = true;
+                    setFolder(state, picked);
+                }),
+            }),
+            state.tagBtn,
+        ]);
+        section.parentNode.insertBefore(bar, section);
+        return state;
+    }
+
+    function relabel(id) {
+        const btn = document.getElementById(`begin-analysis-btn-${id}`);
+        if (btn) {
+            btn.textContent = 'Download missing';
+            btn.title = 'Search for and download the ticked tracks that are not in your library';
+        }
+    }
+
+    // ── folder browser ───────────────────────────────────────────────────
+
+    function overlay(className, children) {
+        const node = el('div', { class: 'fork-album-overlay' }, el('div', { class: `fork-album-dialog ${className}` }, children));
+        node.addEventListener('mousedown', (e) => { if (e.target === node) node.remove(); });
+        document.body.append(node);
+        return node;
+    }
+
+    function openBrowser(start, onPick) {
+        const list = el('div', { class: 'fork-album-dirlist' });
+        const crumb = el('div', { class: 'fork-album-crumb' });
+        let current = '';
+        const pick = el('button', {
+            class: 'download-control-btn primary', type: 'button', text: 'Use this folder', disabled: true,
+            onclick: () => { onPick(current); root.remove(); },
+        });
+        const root = overlay('fork-album-browser', [
+            el('h3', { text: 'Choose the album folder' }),
+            crumb, list,
+            el('div', { class: 'fork-album-actions' }, [
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                pick,
+            ]),
+        ]);
+
+        async function load(path) {
+            list.replaceChildren(el('div', { class: 'fork-album-note', text: 'Loading…' }));
+            let data;
+            try {
+                data = await api('/browse' + (path ? '?path=' + encodeURIComponent(path) : ''));
+            } catch (err) {
+                // a stale or foreign starting folder: fall back to the library roots
+                if (path) return load('');
+                list.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
+                return;
+            }
+            current = data.path || '';
+            pick.disabled = !current;
+            crumb.textContent = current ? `${current}${data.audio ? `  ·  ${data.audio} audio files` : ''}` : 'Library folders';
+            const rows = [];
+            if (current) {
+                rows.push(el('button', {
+                    class: 'fork-album-dir', type: 'button', text: '↑  Up one level',
+                    onclick: () => load(data.parent || ''),
+                }));
+            }
+            for (const dir of data.dirs) {
+                rows.push(el('button', { class: 'fork-album-dir', type: 'button', onclick: () => load(dir.path) }, [
+                    el('span', { text: dir.name }),
+                    dir.audio ? el('small', { text: `${dir.audio} audio` }) : null,
+                ]));
+            }
+            if (!data.dirs.length) rows.push(el('div', { class: 'fork-album-note', text: 'No sub-folders here.' }));
+            list.replaceChildren(...rows);
+        }
+        load(start || '');
+    }
+
+    // ── 3. auto-tag review ───────────────────────────────────────────────
+
+    function openTagger(state) {
+        const process = getProcess(state.id);
+        if (!process || !state.folder) return;
+        const opts = { applyRules: true, rename: false };
+        let data = null;
+        let rows = [];   // {rel, current, track, include, tags:{}, reason}
+
+        const body = el('div', { class: 'fork-album-tagbody' });
+        const status = el('span', { class: 'fork-album-status' });
+        const applyBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Apply tags', disabled: true });
+        const albumInput = el('input', { class: 'fork-album-input', 'aria-label': 'Album' });
+        const yearInput = el('input', { class: 'fork-album-input fork-album-year', 'aria-label': 'Year' });
+
+        const check = (label, key, help, onChange) => el('label', { class: 'fork-album-check', title: help }, [
+            el('input', {
+                type: 'checkbox', checked: opts[key],
+                onchange: (e) => { opts[key] = e.target.checked; if (onChange) onChange(); },
+            }),
+            label,
+        ]);
+
+        const root = overlay('fork-album-tagger', [
+            el('h3', { text: `Auto-tag: ${(process.album && process.album.name) || 'album'}` }),
+            el('div', { class: 'fork-album-crumb', text: state.folder }),
+            el('div', { class: 'fork-album-albumrow' }, [
+                el('label', {}, ['Album', albumInput]),
+                el('label', {}, ['Year', yearInput]),
+            ]),
+            el('div', { class: 'fork-album-options' }, [
+                check('Use my artist rules and translations', 'applyRules',
+                    'Off: propose exactly what the metadata source reports.', () => load()),
+                check('Also rename/move files to my path format', 'rename',
+                    'Off (default): only tags change; files stay where they are.'),
+            ]),
+            body,
+            el('div', { class: 'fork-album-actions' }, [
+                status,
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                applyBtn,
+            ]),
+        ]);
+
+        const proposedFor = (trackIndex) => (data.tracks[trackIndex] ? { ...data.tracks[trackIndex].proposed } : null);
+
+        function refreshStatus() {
+            const chosen = rows.filter((r) => r.include).length;
+            status.textContent = `${chosen} of ${rows.length} files will be tagged`
+                + (data.unmatched_tracks.length ? ` · ${data.unmatched_tracks.length} album tracks have no file` : '');
+            applyBtn.disabled = chosen === 0;
+        }
+
+        function renderRow(row) {
+            const tr = el('tr', { class: row.include ? '' : 'fork-album-off' });
+            const inputs = {};
+            const fill = () => {
+                for (const [key] of FIELDS) inputs[key].value = row.tags[key] != null ? row.tags[key] : '';
+            };
+            const select = el('select', {
+                class: 'fork-album-input', 'aria-label': 'Album track',
+                onchange: (e) => {
+                    row.track = e.target.value === '' ? null : Number(e.target.value);
+                    const proposed = row.track == null ? null : proposedFor(row.track);
+                    row.tags = proposed || { ...row.current };
+                    row.include = row.track != null;
+                    include.checked = row.include;
+                    tr.className = row.include ? '' : 'fork-album-off';
+                    fill();
+                    refreshStatus();
+                },
+            }, [el('option', { value: '', text: '— not on this album —' })].concat(data.tracks.map((t) => el('option', {
+                value: String(t.index), selected: row.track === t.index,
+                text: `${t.disc > 1 ? t.disc + '-' : ''}${String(t.number).padStart(2, '0')}  ${t.source.title}`,
+            }))));
+            const include = el('input', {
+                type: 'checkbox', checked: row.include, 'aria-label': 'Tag this file',
+                onchange: (e) => { row.include = e.target.checked; tr.className = row.include ? '' : 'fork-album-off'; refreshStatus(); },
+            });
+            tr.append(
+                el('td', {}, include),
+                el('td', { class: 'fork-album-file' }, [
+                    el('div', { text: row.rel, title: row.rel }),
+                    el('small', { text: row.reason ? `matched by ${row.reason}` : 'no match found' }),
+                ]),
+                el('td', {}, select),
+            );
+            for (const [key, label, _w] of FIELDS) {
+                const numeric = key.endsWith('_number');
+                inputs[key] = el('input', {
+                    class: 'fork-album-input' + (numeric ? ' fork-album-num' : ''), 'aria-label': label,
+                    oninput: (e) => { row.tags[key] = e.target.value; },
+                });
+                const was = row.current[key];
+                tr.append(el('td', {}, [
+                    inputs[key],
+                    el('small', { class: 'fork-album-was', text: was ? `was: ${was}` : 'was empty', title: String(was || '') }),
+                ]));
+            }
+            fill();
+            return tr;
+        }
+
+        function render() {
+            if (!rows.length) {
+                body.replaceChildren(el('div', { class: 'fork-album-note', text: 'No audio files in this folder.' }));
+                refreshStatus();
+                return;
+            }
+            body.replaceChildren(el('table', { class: 'fork-album-table' }, [
+                el('thead', {}, el('tr', {}, ['', 'File', 'Album track'].concat(FIELDS.map((f) => f[1])).map((t) => el('th', { text: t })))),
+                el('tbody', {}, rows.map(renderRow)),
+            ]));
+            refreshStatus();
+        }
+
+        async function load() {
+            applyBtn.disabled = true;
+            status.textContent = '';
+            body.replaceChildren(el('div', { class: 'fork-album-note', text: opts.applyRules
+                ? 'Reading files and preparing tags (translating new names can take a moment)…'
+                : 'Reading files…' }));
+            try {
+                data = await api('/tag-preview', Object.assign(payload(process), { folder: state.folder, apply_rules: opts.applyRules }));
+            } catch (err) {
+                body.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
+                return;
+            }
+            const first = data.tracks[0] ? data.tracks[0].proposed : {};
+            albumInput.value = first.album || '';
+            yearInput.value = first.year || '';
+            rows = data.rows.map((r) => ({
+                rel: r.rel, current: r.current, track: r.track, reason: r.reason,
+                include: r.track != null,
+                tags: r.track != null ? proposedFor(r.track) : { ...r.current },
+            }));
+            render();
+        }
+
+        applyBtn.addEventListener('click', async () => {
+            const chosen = rows.filter((r) => r.include);
+            if (!chosen.length) return;
+            applyBtn.disabled = true;
+            status.textContent = 'Writing tags…';
+            try {
+                const result = await api('/tag-apply', Object.assign(payload(process), {
+                    folder: state.folder,
+                    rename: opts.rename,
+                    apply_rules: opts.applyRules,
+                    rows: chosen.map((r) => ({
+                        rel: r.rel, track: r.track,
+                        tags: Object.assign({}, r.tags, { album: albumInput.value, year: yearInput.value }),
+                    })),
+                }));
+                const problems = result.results.filter((r) => !r.ok || r.rename_error);
+                toast(`Tagged ${result.written} file${result.written === 1 ? '' : 's'}`
+                    + (result.moved ? `, moved ${result.moved}` : '')
+                    + (problems.length ? ` — ${problems.length} with problems` : ''), problems.length ? 'error' : 'success');
+                if (problems.length) {
+                    status.textContent = problems.slice(0, 3).map((p) => `${p.rel}: ${p.error || p.rename_error}`).join(' · ');
+                    applyBtn.disabled = false;
+                    return;
+                }
+                root.remove();
+                runCheck(state.id, state);
+            } catch (err) {
+                status.textContent = err.message;
+                applyBtn.disabled = false;
+            }
+        });
+
+        load();
+    }
+
+    // ── wiring ───────────────────────────────────────────────────────────
+
+    function enhance(id) {
+        const process = getProcess(id);
+        const modal = process && process.modalElement;
+        if (!modal || process.status !== 'idle') return;
+        relabel(id);
+        const state = addBar(id, modal);
+        if (state) runCheck(id, state);
+    }
+
+    function install() {
+        const original = window.openDownloadMissingModalForArtistAlbum;
+        if (typeof original !== 'function' || original.__forkWrapped) return false;
+        const wrapped = async function (virtualPlaylistId, ...rest) {
+            const result = await original.call(this, virtualPlaylistId, ...rest);
+            try {
+                // playlist-style contexts (charts) are not one album in one folder
+                if (rest[5] !== 'playlist') enhance(virtualPlaylistId);
+            } catch (err) { console.warn('[fork] album pop-up additions failed:', err); }
+            return result;
+        };
+        wrapped.__forkWrapped = true;
+        window.openDownloadMissingModalForArtistAlbum = wrapped;
+        return true;
+    }
+
+    if (!install()) document.addEventListener('DOMContentLoaded', install);
+})();

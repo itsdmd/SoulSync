@@ -178,3 +178,82 @@ def lookup_artist_name():
 @admin_only
 def clear_search_terms():
     return jsonify(success=True, removed=store.clear_search_terms())
+
+
+# ── album pop-up: library check, folder picker, in-place tagging ────────
+
+def _album_payload():
+    body = _body()
+    album = body.get("album") if isinstance(body.get("album"), dict) else {}
+    artist = body.get("artist") if isinstance(body.get("artist"), dict) else {}
+    tracks = [t for t in (body.get("tracks") or []) if isinstance(t, dict)][:500]
+    return body, album, artist, tracks
+
+
+def _folder_error(exc: Exception):
+    status = 403 if isinstance(exc, PermissionError) else 404 if isinstance(exc, FileNotFoundError) else 400
+    return jsonify(success=False, error=str(exc)), status
+
+
+@bp.route("/api/fork/album/check", methods=["POST"])
+@admin_only
+def album_check():
+    """Which tracks of this release are in the library. Never downloads."""
+    from core.fork import album_tagging
+    from core.settings import config_manager
+    from database.music_database import get_database
+
+    _body_, album, artist, tracks = _album_payload()
+    if not tracks:
+        return jsonify(success=False, error="No tracks given"), 400
+    try:
+        server = config_manager.get_active_media_server()
+    except Exception:
+        server = None
+    return jsonify(success=True, **album_tagging.check_album(get_database(), album, artist, tracks, server))
+
+
+@bp.route("/api/fork/album/browse", methods=["GET"])
+@admin_only
+def album_browse():
+    from core.fork import album_tagging
+
+    try:
+        return jsonify(success=True, **album_tagging.browse(request.args.get("path") or None))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+
+
+@bp.route("/api/fork/album/tag-preview", methods=["POST"])
+@admin_only
+def album_tag_preview():
+    from core.fork import album_tagging
+
+    body, album, artist, tracks = _album_payload()
+    if not tracks:
+        return jsonify(success=False, error="No tracks given"), 400
+    try:
+        data = album_tagging.preview(str(body.get("folder") or ""), album, artist, tracks,
+                                     apply_rules=body.get("apply_rules", True) is not False)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    return jsonify(success=True, **data)
+
+
+@bp.route("/api/fork/album/tag-apply", methods=["POST"])
+@admin_only
+def album_tag_apply():
+    from core.fork import album_tagging
+
+    body, album, artist, tracks = _album_payload()
+    rows = body.get("rows") if isinstance(body.get("rows"), list) else []
+    if not rows:
+        return jsonify(success=False, error="Nothing selected to tag"), 400
+    try:
+        data = album_tagging.apply(
+            str(body.get("folder") or ""), rows, album, artist, tracks,
+            source=str(body.get("source") or ""), rename=body.get("rename") is True,
+            apply_rules=body.get("apply_rules", True) is not False)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    return jsonify(success=True, **data)

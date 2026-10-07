@@ -149,3 +149,248 @@
     background: rgba(255, 255, 255, 0.16);
     color: #fff;
 }
+
+/* ── Album pop-up: local files bar, folder browser, auto-tag review ── */
+
+.fork-album-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.fork-album-label {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.fork-album-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;          /* keep the END of a long path (the album folder) visible */
+    text-align: left;
+    font-size: 0.82rem;
+    color: rgba(255, 255, 255, 0.85);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.fork-album-path.fork-album-none {
+    direction: ltr;
+    font-family: inherit;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.fork-album-bar .download-control-btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
+.fork-album-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100002;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(6px);
+}
+
+.fork-album-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 96vw;
+    max-height: 90vh;
+    padding: 20px 22px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    background: rgba(16, 16, 16, 0.99);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7);
+    color: #e8e8e8;
+    font-size: 14px;
+}
+
+.fork-album-dialog h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.fork-album-browser { width: 640px; }
+.fork-album-tagger { width: 1280px; }
+
+.fork-album-crumb {
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+}
+
+.fork-album-dirlist {
+    display: flex;
+    flex-direction: column;
+    min-height: 220px;
+    max-height: 52vh;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+}
+
+.fork-album-dir {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    background: transparent;
+    color: #e8e8e8;
+    font-size: 0.86rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.fork-album-dir:hover { background: rgba(255, 255, 255, 0.06); }
+.fork-album-dir small { color: rgba(var(--accent-rgb), 0.9); flex-shrink: 0; }
+
+.fork-album-note {
+    padding: 22px 12px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.fork-album-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.fork-album-status {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.fork-album-albumrow,
+.fork-album-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    align-items: center;
+}
+
+.fork-album-albumrow label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.8rem;
+}
+
+.fork-album-albumrow label:last-child { flex: 0 0 150px; }
+
+.fork-album-check {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.84rem;
+    cursor: pointer;
+}
+
+.fork-album-check input,
+.fork-album-table input[type="checkbox"] {
+    accent-color: rgb(var(--accent-rgb));
+}
+
+.fork-album-tagbody {
+    flex: 1;
+    min-height: 160px;
+    overflow: auto;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+}
+
+.fork-album-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.fork-album-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 7px 8px;
+    background: #181818;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-align: left;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.fork-album-table td {
+    padding: 6px 8px;
+    vertical-align: top;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.fork-album-table tr.fork-album-off td { opacity: 0.45; }
+.fork-album-table tr.fork-album-off td:first-child,
+.fork-album-table tr.fork-album-off td:nth-child(3) { opacity: 1; }
+
+.fork-album-file { max-width: 230px; }
+.fork-album-file div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+}
+
+.fork-album-table small {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 240px;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.fork-album-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #eee;
+    font-size: 0.84rem;
+}
+
+.fork-album-input:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+}
+
+select.fork-album-input { max-width: 240px; }
+select.fork-album-input option { background: #181818; }
+.fork-album-num { width: 54px; }
+.fork-album-year { width: 90px; }

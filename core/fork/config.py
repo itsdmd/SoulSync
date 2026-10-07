@@ -29,7 +29,7 @@ def defaults() -> Dict[str, Any]:
     return {
         "ollama": {
             "url": _default_ollama_url(),
-            "timeout": 120,
+            "timeout": 300,
             "keep_alive": "10m",
         },
         "models": {task: DEFAULT_MODEL for task in MODEL_TASKS},
