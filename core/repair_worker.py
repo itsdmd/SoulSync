@@ -6453,6 +6453,7 @@ RepairWorker._fix_comma_artist_split = _fork_fix_comma_artist_split
 FINDING_TYPE_META.update({
     'fork_untranslated':   {'label': 'Untranslated Names', 'verb': 'Apply Translation'},
     'fork_album_volumes':  {'label': 'Album Volumes', 'verb': 'Group Volumes'},
+    'fork_single_into_album': {'label': 'Singles to Merge', 'verb': 'Merge Into Album'},
 })
 JOB_CATEGORIES.update({
     'fork_auto_translate': 'Tags & metadata',

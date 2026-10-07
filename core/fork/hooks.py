@@ -207,6 +207,37 @@ def completion_from_library_analysis(db: Any, result: Any, album: Any, artist_na
         return result
 
 
+def keep_both_versions(job: Any, context: Any, track_a: Any, track_b: Any) -> bool:
+    """Duplicate Detector / Single-Album Dedup: two look-alike tracks that are
+    both wanted (different versions of a song, or one sits on a release that
+    carries a version the other release lacks). The index is built once per
+    scan and kept on the job."""
+    if not _active():
+        return False
+    try:
+        from core.fork import single_merge
+
+        index = getattr(job, "_fork_release_index", None)
+        if index is None:
+            index = job._fork_release_index = single_merge.ReleaseIndex(context.db)
+        return index.keep_both(track_a or {}, track_b or {})
+    except Exception as exc:
+        logger.debug("keep_both_versions failed: %s", exc)
+        return False
+
+
+def scan_single_merges(job: Any, context: Any, result: Any) -> None:
+    """Single/Album Dedup: also report singles an album is missing."""
+    if not _active():
+        return
+    try:
+        from core.fork import jobs
+
+        jobs.scan_single_merges(job, context, result)
+    except Exception as exc:
+        logger.warning("scan_single_merges failed: %s", exc)
+
+
 def incomplete_album_covered(details: Any) -> str:
     """Album Completeness: the saved folder that holds the whole album, or ""."""
     if not _active() or not isinstance(details, dict):

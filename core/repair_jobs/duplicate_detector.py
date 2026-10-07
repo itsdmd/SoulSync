@@ -350,6 +350,9 @@ class DuplicateDetectorJob(RepairJob):
                 if _conflicting_title_numbers(numbered_title, t2['norm_title']):
                     continue
 
+                if _fork_keep_both(self, context, t1, t2):  # fork
+                    continue
+
                 if require_metadata_match:
                     title_sim = SequenceMatcher(None, t1['norm_title'], t2['norm_title']).ratio()
                     if title_sim < title_threshold:
@@ -641,3 +644,33 @@ def _is_same_physical_file(p1, p2, dur1, dur2) -> bool:
     if dur1 and dur2 and abs(dur1 - dur2) > 1.0:
         return False
     return True
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Different versions of a song (main / instrumental / live / remix) are not
+# duplicates, and neither is a song that sits both on an album and on a
+# single which also carries a version the album lacks. See
+# core/fork/single_merge.py.
+def _fork_keep_both(job, context, t1, t2):
+    from core.fork import hooks
+
+    return hooks.keep_both_versions(job, context, t1, t2)
+
+
+_upstream_scan = DuplicateDetectorJob.scan
+
+
+def _fork_scan(self, context):
+    self._fork_release_index = None
+    try:
+        return _upstream_scan(self, context)
+    finally:
+        self._fork_release_index = None
+
+
+DuplicateDetectorJob.scan = _fork_scan
+DuplicateDetectorJob.help_text += (
+    '\n\nFork: two versions of one song (the song and its instrumental, a live take, a remix) are '
+    'never reported, and neither is a song held both on an album and on a single that also carries '
+    'a version the album does not have.'
+)

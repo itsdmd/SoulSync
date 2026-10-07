@@ -93,6 +93,7 @@ export const FINDING_TYPE_BLURBS: Record<string, string> = {
   // fork (itsdmd/SoulSync)
   fork_untranslated: 'Album and song names still untranslated, with a proposed translation.',
   fork_album_volumes: 'Albums split into volumes that can become one album with discs.',
+  fork_single_into_album: 'Singles that an album in the library lists but does not hold.',
 };
 
 export function findingTypeBlurb(findingType: string): string {

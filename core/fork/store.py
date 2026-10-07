@@ -357,6 +357,11 @@ def save_album_check(source: str, album_id: str, found: int, total: int, fingerp
         )
 
 
+def clear_album_checks() -> int:
+    with connect() as conn:
+        return conn.execute("DELETE FROM fork_album_checks").rowcount
+
+
 def library_fingerprint() -> str:
     """Changes whenever tracks are added to or removed from the library."""
     with connect() as conn:

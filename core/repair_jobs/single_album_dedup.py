@@ -296,3 +296,58 @@ def _normalize(text: str) -> str:
     """Normalize text for fuzzy comparison: any script (#1306)."""
     from core.text.fold import fold_title
     return fold_title(text or '')
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A single that carries a version its album lacks (the song + its
+# instrumental) is a release worth keeping: not reported as redundant. And
+# the other way round: a single an album in the library is MISSING is
+# reported so it can be merged into that album. See core/fork/single_merge.py.
+_upstream_scan = SingleAlbumDedupJob.scan
+
+
+def _fork_scan(self, context):
+    from core.fork import hooks
+
+    self._fork_release_index = None
+    original = context.create_finding
+    kept = []
+    if original:
+        def create_finding(*args, **kwargs):
+            details = kwargs.get('details') or {}
+            if kwargs.get('finding_type') == 'single_album_redundant' and hooks.keep_both_versions(
+                    self, context, details.get('single_track'), details.get('album_track')):
+                kept.append(kwargs.get('title'))
+                logger.info("Kept, its release carries another version: %s", kwargs.get('title'))
+                return False
+            return original(*args, **kwargs)
+
+        context.create_finding = create_finding
+    try:
+        result = _upstream_scan(self, context)
+    finally:
+        context.create_finding = original
+        self._fork_release_index = None
+    if kept:
+        # upstream counted these as duplicates of an existing finding
+        result.findings_skipped_dedup = max(0, result.findings_skipped_dedup - len(kept))
+        result.skipped += len(kept)
+    hooks.scan_single_merges(self, context, result)
+    return result
+
+
+SingleAlbumDedupJob.scan = _fork_scan
+SingleAlbumDedupJob.default_settings = dict(
+    SingleAlbumDedupJob.default_settings, merge_into_albums=True, merge_duration_tolerance=10)
+SingleAlbumDedupJob.description = (
+    'Finds singles whose track is already on an album, and singles an album is missing')
+SingleAlbumDedupJob.help_text += (
+    '\n\nFork additions:\n'
+    '- Merge Into Albums: when an album in your library lists a song it does not hold, and that song '
+    'is in the library as a single, the finding offers to merge it: the file is retagged with the '
+    "album's name and track number, moved into the album's folder and filed under the album. A "
+    'single is only merged when every one of its tracks is on the album\'s track list.\n'
+    '- Merge Duration Tolerance: seconds a single may differ in length from the listed track.\n'
+    '- A single that carries another version of the song the album lacks (an instrumental, a live '
+    'take, a remix) is kept whole: nothing is merged and its song is not reported as redundant.'
+)

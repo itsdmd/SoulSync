@@ -532,6 +532,44 @@ def _album_cover(target_root: str) -> None:
                 return
 
 
+# ── singles an album is missing (part of Single/Album Dedup) ────────────
+
+def scan_single_merges(job: RepairJob, context: Any, result: Any) -> None:
+    from core.fork import single_merge
+
+    settings = job_settings(job, context)
+    if not is_on(settings.get("merge_into_albums", True)):
+        return
+
+    def progress(done: int, total: int, label: str) -> None:
+        if context.report_progress and (done % 10 == 0 or done == total):
+            context.report_progress(scanned=done, total=total, phase=f"Reading album track lists {done} / {total}",
+                                    log_line=f"Track list: {label}", log_type="info")
+
+    merges = single_merge.find_merges(
+        context.db, float(settings.get("title_similarity", 0.85)), float(settings.get("merge_duration_tolerance", 10)),
+        check_stop=context.check_stop, progress=progress)
+    for details in merges:
+        title, description = single_merge.finding_text(details)
+        if context.report_progress:
+            context.report_progress(log_line=title, log_type="skip")
+        if not context.create_finding:
+            continue
+        try:
+            inserted = context.create_finding(
+                job_id=job.job_id, finding_type=single_merge.FINDING_TYPE, severity="info",
+                entity_type="album", entity_id=str(details["single"]["album_id"]),
+                file_path=details["tracks"][0]["file_path"], title=title, description=description, details=details)
+        except Exception as exc:
+            logger.debug("single merge finding not created: %s", exc)
+            result.errors += 1
+            continue
+        if inserted:
+            result.findings_created += 1
+        else:
+            result.findings_skipped_dedup += 1
+
+
 # ── fix handlers ────────────────────────────────────────────────────────
 
 def fix_handlers(worker: Any) -> Dict[str, Callable[..., Dict[str, Any]]]:
@@ -542,7 +580,13 @@ def fix_handlers(worker: Any) -> Dict[str, Callable[..., Dict[str, Any]]]:
         details = details or {}
         return group_volumes(worker.db, details, is_on(details.get("move_files", True)))
 
-    return {"fork_untranslated": translation, "fork_album_volumes": volumes}
+    def single_into_album(entity_type: Any, entity_id: Any, file_path: Any, details: Any) -> Dict[str, Any]:
+        from core.fork import single_merge
+
+        return single_merge.merge(worker.db, details or {})
+
+    return {"fork_untranslated": translation, "fork_album_volumes": volumes,
+            "fork_single_into_album": single_into_album}
 
 
 __all__ = ["apply_translation_finding", "describe_volumes", "fix_handlers", "group_volumes", "parse_volume",

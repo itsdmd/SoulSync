@@ -30,6 +30,7 @@ const LOCKS: Record<string, Record<string, (values: Values) => string | undefine
 const FORK_FIX_LABELS: Record<string, string> = {
   fork_untranslated: 'Apply',
   fork_album_volumes: 'Group',
+  fork_single_into_album: 'Merge',
 };
 
 export function forkFixLabel(findingType: string): string | null {
