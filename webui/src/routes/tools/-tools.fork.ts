@@ -26,6 +26,23 @@ const LOCKS: Record<string, Record<string, (values: Values) => string | undefine
   },
 };
 
+/**
+ * fork: findings whose content can be edited before fixing. The editor itself
+ * is plain JS (webui/static/fork-album.js); this only finds it. It announces a
+ * saved change with FORK_FINDINGS_CHANGED so the list reloads.
+ */
+export const FORK_FINDINGS_CHANGED = 'fork:findings-changed';
+
+type EditableFinding = { finding_type: string; status: string };
+
+export function forkFindingEditor(finding: EditableFinding): (() => void) | undefined {
+  if (finding.finding_type !== 'fork_album_volumes' || finding.status !== 'pending')
+    return undefined;
+  const open = (window as unknown as { forkEditVolumeGroup?: (f: EditableFinding) => void })
+    .forkEditVolumeGroup;
+  return typeof open === 'function' ? () => open(finding) : undefined;
+}
+
 /** Why a setting cannot be edited right now, or undefined when it can. */
 export function repairSettingLockReason(
   jobId: string,

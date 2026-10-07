@@ -421,3 +421,41 @@ def album_tag_apply():
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         return _folder_error(exc)
     return jsonify(success=True, **data)
+
+
+# ── Album Volume Grouping: editing a set by hand ────────────────────────
+
+@bp.route("/api/fork/volumes/search", methods=["GET"])
+@admin_only
+def volumes_search_albums():
+    from core.fork import jobs
+    from database.music_database import get_database
+
+    return jsonify(success=True, albums=jobs.search_albums(get_database(), request.args.get("q") or ""))
+
+
+@bp.route("/api/fork/volumes/describe", methods=["POST"])
+@admin_only
+def volumes_describe():
+    """Titles, track counts and folders for the items being edited."""
+    from core.fork import jobs
+    from database.music_database import get_database
+
+    try:
+        return jsonify(success=True, volumes=jobs.describe_volumes(get_database(), _body().get("items")))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+
+
+@bp.route("/api/fork/volumes/finding/<int:finding_id>", methods=["POST"])
+@admin_only
+def volumes_update_finding(finding_id: int):
+    from core.fork import jobs
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        details = jobs.update_volume_finding(get_database(), finding_id, body.get("album"), body.get("items"))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    return jsonify(success=True, details=details)

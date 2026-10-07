@@ -76,6 +76,7 @@ import {
   REPAIR_DEFAULT_PAGE_SIZE,
   REPAIR_PAGE_SIZE_OPTIONS,
 } from '../-tools.core';
+import { FORK_FINDINGS_CHANGED, forkFindingEditor } from '../-tools.fork';
 import { safeFixablePending, visibleGroups } from '../-tools.groups';
 import { RedownloadModal } from '../../artist-detail/-ui/redownload-modal';
 import { ReidentifyModal } from '../../artist-detail/-ui/reidentify-modal';
@@ -336,6 +337,12 @@ export function FindingsSurface({
     void loadFindings();
     onStatusChanged();
   }, [loadCounts, loadFindings, loadGroups, onStatusChanged]);
+
+  // fork: a finding edited in the fork's own dialog
+  useEffect(() => {
+    window.addEventListener(FORK_FINDINGS_CHANGED, refreshAll);
+    return () => window.removeEventListener(FORK_FINDINGS_CHANGED, refreshAll);
+  }, [refreshAll]);
 
   // a job finished: its findings only showed after a page refresh (#1386).
   // any change after the first render counts, even from no runs at all (a
@@ -1586,6 +1593,7 @@ function FindingCard({
   const details = finding.details || {};
   const filePath = findingFilePath(finding);
   const fixLabel = findingFixLabel(finding.finding_type);
+  const forkEdit = forkFindingEditor(finding); // fork
   const statusBadge = findingStatusBadge(finding.status, finding.user_action);
 
   return (
@@ -1637,6 +1645,16 @@ function FindingCard({
         <div className="repair-finding-actions" onClick={(event) => event.stopPropagation()}>
           {finding.status === 'pending' ? (
             <>
+              {forkEdit ? (
+                <button
+                  className="repair-finding-btn fix"
+                  type="button"
+                  title="Add or remove items and change disc numbers before grouping"
+                  onClick={forkEdit}
+                >
+                  Edit…
+                </button>
+              ) : null}
               {fixLabel ? (
                 <button
                   className="repair-finding-btn fix"

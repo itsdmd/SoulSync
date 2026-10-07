@@ -158,9 +158,12 @@ class VolumeGroupingJob(RepairJob):
         "and turns each into a single album: every track gets the common album name, and its volume "
         "number becomes its disc number.\n\n"
         "Recognised markers: Vol. / Volume, Pt. / Part, Disc / CD with a number or Roman numeral, "
-        "and 第N卷 / 第N集 / 卷N.\n\n"
+        "and 第N卷 / 第N集 / 卷N — after a comma, a dash, in brackets or with nothing in front. An album "
+        "with the same name and no marker counts as volume 1 when no other album claims that number.\n\n"
         "Two volumes are the minimum, and a set where two albums claim the same number is left alone. "
-        "In dry run mode (default) each set is a finding you approve; nothing changes until then.\n\n"
+        "In dry run mode (default) each set is a finding you approve; nothing changes until then. "
+        "Edit… on a finding lets you add albums or folders to the set, remove some, rename the album "
+        "and change each item's disc number first.\n\n"
         "Settings:\n"
         "- Move Files: also move the files into one album folder, in Disc 1, Disc 2… sub-folders "
         "(off: only the tags change)\n"
@@ -183,13 +186,10 @@ class VolumeGroupingJob(RepairJob):
         for index, group in enumerate(groups, 1):
             if context.check_stop():
                 return result
-            numbers = ", ".join(str(v["number"]) for v in group["volumes"])
-            tracks = sum(v["tracks"] for v in group["volumes"])
-            details = {
-                "artist": group["artist"], "album": group["album"],
-                "volume_count": len(group["volumes"]), "volume_numbers": numbers, "track_count": tracks,
-                "volumes": group["volumes"], "move_files": move_files,
-            }
+            details = jobs.finding_details(group["album"], group["artist"], group["volumes"], move_files)
+            numbers = details["volume_numbers"]
+            title, description = jobs.finding_text(details)
+            entity_id = f'{group["artist"]}:{fold(group["album"])}'
             if context.report_progress:
                 context.report_progress(scanned=index, total=len(groups), log_type="warning",
                                         log_line=f'{group["artist"]} — {group["album"]}: volumes {numbers}')
@@ -199,16 +199,18 @@ class VolumeGroupingJob(RepairJob):
                 try:
                     inserted = context.create_finding(
                         job_id=self.job_id, finding_type="fork_album_volumes", severity="info",
-                        entity_type="album", entity_id=f'{group["artist"]}:{fold(group["album"])}',
-                        file_path=None, title=f'Volumes of one album: {group["album"]}',
-                        description=(f'{len(group["volumes"])} volumes by {group["artist"]} would become one '
-                                     f'album "{group["album"]}" with {len(group["volumes"])} discs '
-                                     f'({tracks} tracks)'),
-                        details=details)
+                        entity_type="album", entity_id=entity_id,
+                        file_path=None, title=title, description=description, details=details)
                     if inserted:
                         result.findings_created += 1
                     else:
                         result.findings_skipped_dedup += 1
+                        # already reported: what the set contains may have
+                        # changed since (a volume was added, or is now detected)
+                        try:
+                            jobs.refresh_volume_finding(self.job_id, entity_id, details)
+                        except Exception as exc:
+                            logger.debug("finding for %r not refreshed: %s", group["album"], exc)
                 except Exception as exc:
                     logger.debug("could not create finding for %r: %s", group["album"], exc)
                     result.errors += 1

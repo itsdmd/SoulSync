@@ -321,3 +321,96 @@ def test_jobs_are_registered_with_handlers_labels_and_a_family():
     assert {"fork_untranslated", "fork_album_volumes"} <= set(handlers) and "comma_artist_split" in handlers
     assert FINDING_TYPE_META["fork_album_volumes"]["verb"] == "Group Volumes"
     assert JOB_CATEGORIES["fork_auto_translate"] == "Tags & metadata"
+
+
+def test_volume_markers_come_in_many_shapes():
+    parse = jobs.parse_volume
+    for title in ("Star Wars Epic Collection, Vol. 2", "Star Wars Epic Collection Vol. 4",
+                  "Star Wars Epic Collection Vol, 4", "Star Wars Epic Collection (Vol. 3)",
+                  "Star Wars Epic Collection - Volume 5", "Star Wars Epic Collection: Vol.6",
+                  "Star Wars Epic Collection [Vol 7]"):
+        assert parse(title)[0] == "Star Wars Epic Collection", title
+    assert parse("Attack on Titan: Epic Collection, Vol. 3 (Cover)") == ("Attack on Titan: Epic Collection (Cover)", 3)
+
+
+def test_first_volume_without_a_marker_and_uneven_names_are_grouped(env):
+    db = env["db"]
+    for title in ("Star Wars Epic Collection", "Star Wars Epic Collection, Vol. 2",
+                  "Star Wars Epic Collection, Vol. 3", "Star Wars Epic Collection Vol, 4",
+                  "Titan: Epic Collection", "Titan: Epic Collection, Vol. 2 (Cover)", "Titan Epic Collection (Vol. 3)",
+                  "Jojo Epic Collection",                                    # nothing to join
+                  "Hits", "Hits Vol. 1", "Hits Vol. 2"):                     # volume 1 is taken: "Hits" stays out
+        db.add("Samuel Kim", title, "t", 1, "")
+    db.add("Other", "Star Wars Epic Collection, Vol. 9", "t", 1, "")
+    groups = {g["album"]: [(v["number"], v["title"], bool(v.get("assumed"))) for v in g["volumes"]]
+              for g in jobs.volume_groups(db) if g["artist"] == "Samuel Kim"}
+    assert groups["Star Wars Epic Collection"] == [
+        (1, "Star Wars Epic Collection", True), (2, "Star Wars Epic Collection, Vol. 2", False),
+        (3, "Star Wars Epic Collection, Vol. 3", False), (4, "Star Wars Epic Collection Vol, 4", False)]
+    assert [v[:2] for v in groups["Titan Epic Collection"]] == [
+        (1, "Titan: Epic Collection"), (2, "Titan: Epic Collection, Vol. 2 (Cover)"), (3, "Titan Epic Collection (Vol. 3)")]
+    assert [v[0] for v in groups["Hits"]] == [1, 2] and len(groups) == 3
+
+
+def _findings_table(env, monkeypatch, details):
+    import json
+
+    monkeypatch.setenv("DATABASE_PATH", env["db"].path)
+    store._initialised.clear()
+    conn = env["db"]._get_connection()
+    conn.execute("CREATE TABLE IF NOT EXISTS repair_findings (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, "
+                 "finding_type TEXT, status TEXT DEFAULT 'pending', entity_id TEXT, title TEXT, description TEXT, "
+                 "details_json TEXT, updated_at TIMESTAMP)")
+    conn.execute("INSERT INTO repair_findings (job_id, finding_type, entity_id, title, details_json) VALUES "
+                 "('fork_volume_grouping', 'fork_album_volumes', 'HOYO-MiX:x', 'old', ?)", (json.dumps(details),))
+    conn.commit()
+    conn.close()
+
+    def read():
+        conn = env["db"]._get_connection()
+        row = conn.execute("SELECT title, description, details_json FROM repair_findings WHERE id = 1").fetchone()
+        conn.close()
+        return row[0], row[1], json.loads(row[2])
+    return read
+
+
+def test_a_set_can_be_edited_by_hand_then_grouped(env, monkeypatch):
+    paths = _volumes(env, count=3)
+    extra = env["root"] / "HOYO-MiX" / "Loose Folder"
+    loose = _flac(str(extra / "01 - Bonus.flac"), title="Bonus", album="Whatever", tracknumber=1)
+    group = jobs.volume_groups(env["db"])[0]
+    read = _findings_table(env, monkeypatch, jobs.finding_details(group["album"], "HOYO-MiX", group["volumes"], True))
+    ids = {v["number"]: v["album_id"] for v in group["volumes"]}
+    assert [a["title"] for a in jobs.search_albums(env["db"], "footprints vol. 2")] == ["Footprints of the Traveler, Vol. 2"]
+
+    # drop volume 2, renumber volume 3 as disc 2, add a folder as disc 3, rename the album
+    items = [{"album_id": ids[1], "number": 1}, {"album_id": ids[3], "number": 2}, {"folder": str(extra), "number": 3}]
+    details = jobs.update_volume_finding(env["db"], 1, "Footprints (Complete)", items)
+    title, description, stored = read()
+    assert stored == details and details["edited"] is True and details["volume_numbers"] == "1, 2, 3"
+    assert title == "Volumes of one album: Footprints (Complete)" and "5 tracks" in description
+    assert details["volumes"][2] == {"folder": os.path.realpath(str(extra)), "title": "Loose Folder", "number": 3, "tracks": 1}
+
+    for bad, why in (([items[0]], "at least two"), ([items[0], dict(items[1], number=1)], "same disc number"),
+                     ([items[0], items[0]], "twice"), ([items[0], {"folder": "/etc", "number": 2}], "")):
+        with pytest.raises((ValueError, PermissionError, FileNotFoundError), match=why or None):
+            jobs.describe_volumes(env["db"], bad)
+
+    # a later scan does not undo the edit
+    assert jobs.refresh_volume_finding("fork_volume_grouping", "HOYO-MiX:x",
+                                       jobs.finding_details(group["album"], "HOYO-MiX", group["volumes"], True)) is False
+    applied = jobs.group_volumes(env["db"], details, move_files=False)
+    assert applied["success"] and applied["fixed"] == 5
+    assert FLAC(paths[(3, 1)])["discnumber"] == ["2"] and FLAC(paths[(3, 1)])["album"] == ["Footprints (Complete)"]
+    assert FLAC(loose)["discnumber"] == ["3"] and FLAC(loose)["album"] == ["Footprints (Complete)"]
+    assert FLAC(paths[(2, 1)])["album"] == ["Footprints of the Traveler, Vol. 2"]          # removed: untouched
+
+
+def test_a_rescan_updates_an_unedited_finding(env, monkeypatch):
+    _volumes(env, count=3)
+    group = jobs.volume_groups(env["db"])[0]
+    old = jobs.finding_details(group["album"], "HOYO-MiX", group["volumes"][:2], True)
+    read = _findings_table(env, monkeypatch, old)
+    new = jobs.finding_details(group["album"], "HOYO-MiX", group["volumes"], True)
+    assert jobs.refresh_volume_finding("fork_volume_grouping", "HOYO-MiX:x", new) is True
+    assert read()[2]["volume_numbers"] == "1, 2, 3" and "3 volumes" in read()[1]

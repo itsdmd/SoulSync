@@ -246,6 +246,62 @@
 
 .fork-album-browser { width: 640px; }
 .fork-album-tagger { width: 1280px; }
+.fork-volume-editor { width: 820px; }
+
+.fork-volume-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 36vh;
+    overflow-y: auto;
+}
+
+.fork-volume-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.fork-volume-disc {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.fork-volume-disc input { width: 58px; }
+
+.fork-volume-name { flex: 1; min-width: 0; }
+
+.fork-volume-name div,
+.fork-volume-name small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fork-volume-name div { font-size: 0.88rem; }
+.fork-volume-name small { font-size: 0.72rem; color: rgba(255, 255, 255, 0.5); }
+
+.fork-volume-row .download-control-btn,
+.fork-volume-add .download-control-btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
+.fork-volume-add { display: flex; gap: 10px; align-items: center; }
+.fork-volume-add .fork-album-search { flex: 1; }
+.fork-volume-results { max-height: 22vh; }
+.fork-volume-results:empty { display: none; }
+.fork-volume-problem { color: #f87171; }
 
 .fork-album-crumb {
     font-size: 0.78rem;

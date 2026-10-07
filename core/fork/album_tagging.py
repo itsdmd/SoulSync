@@ -487,7 +487,12 @@ def _read_tags(path: str) -> Dict[str, Any]:
     }
 
 
-def scan_folder(folder: str) -> List[Dict[str, Any]]:
+def list_audio(folder: str) -> List[Dict[str, Any]]:
+    """Audio files in ``folder`` (and disc subfolders), tags not read."""
+    return scan_folder(folder, read_tags=False)
+
+
+def scan_folder(folder: str, read_tags: bool = True) -> List[Dict[str, Any]]:
     """Audio files in ``folder`` (and disc subfolders) with their current tags."""
     exts = _audio_exts()
     files: List[Dict[str, Any]] = []
@@ -500,7 +505,8 @@ def scan_folder(folder: str) -> List[Dict[str, Any]]:
             if os.path.splitext(name)[1].lower() not in exts or name.startswith("."):
                 continue
             path = os.path.join(current, name)
-            files.append({"path": path, "rel": os.path.relpath(path, folder), "current": _read_tags(path)})
+            files.append({"path": path, "rel": os.path.relpath(path, folder),
+                          "current": _read_tags(path) if read_tags else {}})
             if len(files) >= _MAX_FILES:
                 return files
     return files

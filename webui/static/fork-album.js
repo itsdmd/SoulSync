@@ -644,6 +644,169 @@
         load();
     }
 
+    // ── Album Volume Grouping: edit a set before it is grouped ───────────
+    // Opened from the "Edit…" button of a finding on the Tools page.
+
+    async function forkApi(path, body) {
+        const resp = await fetchWithRetry('/api/fork' + path, body ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        } : {}, true);
+        let data = {};
+        try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
+        if (!resp.ok || data.success === false) throw new Error(data.error || `Request failed (${resp.status})`);
+        return data;
+    }
+
+    function openVolumeEditor(finding) {
+        const details = (finding && finding.details) || {};
+        let items = (details.volumes || []).map((v) => Object.assign({}, v));
+        const keyOf = (item) => (item.album_id != null ? `a:${item.album_id}` : `f:${item.folder}`);
+        const nextNumber = () => {
+            const used = new Set(items.map((i) => Number(i.number)));
+            let n = 1;
+            while (used.has(n)) n++;
+            return n;
+        };
+
+        const albumInput = el('input', { class: 'fork-album-input', 'aria-label': 'Album name', value: details.album || '' });
+        const list = el('div', { class: 'fork-volume-list' });
+        const status = el('span', { class: 'fork-album-status' });
+        const results = el('div', { class: 'fork-album-dirlist fork-volume-results' });
+        const saveBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Save' });
+
+        function problem() {
+            if (!albumInput.value.trim()) return 'The album needs a name';
+            if (items.length < 2) return 'A set needs at least two items';
+            const numbers = items.map((i) => Number(i.number));
+            if (numbers.some((n) => !Number.isInteger(n) || n < 1 || n > 99)) return 'Disc numbers go from 1 to 99';
+            if (new Set(numbers).size !== numbers.length) return 'Two items have the same disc number';
+            return '';
+        }
+
+        function refresh() {
+            const why = problem();
+            const tracks = items.reduce((sum, i) => sum + (Number(i.tracks) || 0), 0);
+            status.textContent = why || `${items.length} discs, ${tracks} tracks`;
+            status.classList.toggle('fork-volume-problem', !!why);
+            saveBtn.disabled = !!why;
+        }
+
+        function render() {
+            list.replaceChildren(...(items.length ? items : [null]).map((item) => {
+                if (!item) return el('div', { class: 'fork-album-note', text: 'Nothing in this set. Add albums or folders below.' });
+                return el('div', { class: 'fork-volume-row' }, [
+                    el('label', { class: 'fork-volume-disc' }, ['Disc', el('input', {
+                        class: 'fork-album-input fork-album-num', type: 'number', min: '1', max: '99',
+                        value: String(item.number), 'aria-label': `Disc number of ${item.title}`,
+                        oninput: (e) => { item.number = Number(e.target.value); refresh(); },
+                    })]),
+                    el('div', { class: 'fork-volume-name' }, [
+                        el('div', { text: item.title || item.folder || '', title: item.title || '' }),
+                        el('small', {
+                            text: [item.album_id != null ? 'Library album' : 'Folder',
+                                item.tracks != null ? `${item.tracks} track${item.tracks === 1 ? '' : 's'}` : '',
+                                item.assumed ? 'no volume marker: assumed to be the first' : '',
+                                item.folder || ''].filter(Boolean).join('  ·  '),
+                            title: item.folder || '',
+                        }),
+                    ]),
+                    el('button', {
+                        class: 'download-control-btn secondary', type: 'button', text: 'Remove',
+                        title: 'Leave this one out of the set. Its files are not touched.',
+                        onclick: () => { items = items.filter((i) => i !== item); render(); },
+                    }),
+                ]);
+            }));
+            refresh();
+        }
+
+        function add(item) {
+            if (items.some((i) => keyOf(i) === keyOf(item))) { toast('Already in the set', 'error'); return; }
+            items.push(Object.assign({ number: nextNumber() }, item));
+            render();
+        }
+
+        let searchTimer = null;
+        let searchSeq = 0;
+        async function runSearch(query) {
+            const seq = ++searchSeq;
+            if (!query.trim()) { results.replaceChildren(); return; }
+            let data;
+            try { data = await forkApi('/volumes/search?q=' + encodeURIComponent(query)); } catch (err) {
+                if (seq === searchSeq) results.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
+                return;
+            }
+            if (seq !== searchSeq) return;
+            if (!data.albums.length) {
+                results.replaceChildren(el('div', { class: 'fork-album-note', text: 'No album with that name in your library.' }));
+                return;
+            }
+            results.replaceChildren(...data.albums.map((album) => el('div', {
+                class: 'fork-album-dir', role: 'button', tabindex: '0', title: 'Add to the set',
+                onclick: () => add({ album_id: album.album_id, title: album.title, tracks: album.tracks }),
+            }, [
+                el('span', { text: `${album.title}  —  ${album.artist}` }),
+                el('small', { text: `${album.tracks} track${album.tracks === 1 ? '' : 's'}  ＋` }),
+            ])));
+        }
+
+        const search = el('input', {
+            class: 'fork-album-input fork-album-search', type: 'search',
+            placeholder: 'Search library albums to add (album or artist name)…', 'aria-label': 'Search library albums',
+            oninput: (e) => { clearTimeout(searchTimer); const q = e.target.value; searchTimer = setTimeout(() => runSearch(q), 250); },
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            status.textContent = 'Saving…';
+            try {
+                await forkApi(`/volumes/finding/${finding.id}`, {
+                    album: albumInput.value,
+                    items: items.map((i) => (i.album_id != null
+                        ? { album_id: i.album_id, number: Number(i.number) }
+                        : { folder: i.folder, number: Number(i.number) })),
+                });
+            } catch (err) {
+                status.textContent = err.message;
+                status.classList.add('fork-volume-problem');
+                saveBtn.disabled = false;
+                return;
+            }
+            root.remove();
+            toast('Set saved. Use the finding\'s fix button to group it.');
+            window.dispatchEvent(new Event('fork:findings-changed'));
+        });
+        albumInput.addEventListener('input', refresh);
+
+        const root = overlay('fork-volume-editor', [
+            el('h3', { text: 'Edit volume set' }),
+            el('div', { class: 'fork-album-crumb', text: details.artist ? `Artist: ${details.artist}` : '' }),
+            el('div', { class: 'fork-album-albumrow' }, [el('label', {}, ['Album name', albumInput])]),
+            list,
+            el('div', { class: 'fork-volume-add' }, [
+                search,
+                el('button', {
+                    class: 'download-control-btn secondary', type: 'button', text: 'Add folder…',
+                    title: 'Add a folder from your library as one disc (also for files SoulSync has not scanned)',
+                    onclick: () => openBrowser('', (picked) => add({
+                        folder: picked, title: picked.split('/').filter(Boolean).pop() || picked,
+                    })),
+                }),
+            ]),
+            results,
+            el('div', { class: 'fork-album-actions' }, [
+                status,
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                saveBtn,
+            ]),
+        ]);
+        render();
+    }
+
+    window.forkEditVolumeGroup = openVolumeEditor;
+
     // ── wiring ───────────────────────────────────────────────────────────
 
     function enhance(id) {
