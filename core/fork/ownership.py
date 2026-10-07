@@ -108,6 +108,19 @@ def library_names(db: Any, kind: str, name: str, artist: str) -> List[Tuple[str,
             seen.add(key)
             pairs.append((title, by))
 
+    # A source lists "…, Vol. 2" as its own album; after Album Volume Grouping
+    # the library holds one album with that volume as a disc.
+    if kind == "album":
+        base = _volume_base(name)
+        if base:
+            for form in forms:
+                add(base, form)
+                if contains_cjk(base):
+                    try:
+                        add(translate.translate_name("album", base, allow_llm=False), form)
+                    except Exception as exc:
+                        logger.debug("recorded name lookup failed for %r: %s", base, exc)
+
     written = name
     if isinstance(name, str) and contains_cjk(name):
         try:
@@ -134,6 +147,16 @@ def library_names(db: Any, kind: str, name: str, artist: str) -> List[Tuple[str,
     return pairs[:_MAX_ATTEMPTS]
 
 
+def _volume_base(name: Any) -> str:
+    try:
+        from core.fork.jobs import parse_volume
+
+        parsed = parse_volume(str(name or ""))
+        return parsed[0] if parsed else ""
+    except Exception:
+        return ""
+
+
 def _involves_fork_names(*values: Any) -> bool:
     return any(isinstance(v, str) and contains_cjk(v) for v in values)
 
@@ -153,7 +176,8 @@ def retry_check(db: Any, kind: str, name: str, artist: str, threshold: float,
             or bool((store.get_artist_aliases(artist.strip()) or {}).get("aliases")))
     except Exception:
         has_rule = False
-    if not has_rule and not _involves_fork_names(name, artist):
+    if not has_rule and not _involves_fork_names(name, artist) \
+            and not (kind == "album" and _volume_base(name)):
         return first
     for lib_name, lib_artist in library_names(db, kind, name, artist):
         try:

@@ -90,6 +90,9 @@ export const FINDING_TYPE_BLURBS: Record<string, string> = {
   suspect_album_tag: 'Tracks probably filed under the wrong album due to bad tags.',
   fake_lossless: 'FLAC upscaled from a lossy source. Review only.',
   album_needs_enrichment: 'Albums still waiting on a metadata enrichment pass.',
+  // fork (itsdmd/SoulSync)
+  fork_untranslated: 'Album and song names still untranslated, with a proposed translation.',
+  fork_album_volumes: 'Albums split into volumes that can become one album with discs.',
 };
 
 export function findingTypeBlurb(findingType: string): string {

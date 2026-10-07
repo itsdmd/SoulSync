@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import threading
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from core.fork import config, ollama, store
 from core.fork.cjk import contains_cjk, is_only_decoration, split_name
@@ -167,3 +167,73 @@ def translate_name(kind: str, value: str, hint: Optional[Dict[str, str]] = None,
 
 def enabled(kind: str) -> bool:
     return bool(config.get("translate.albums" if kind == "album" else "translate.titles"))
+
+
+def translate_batch(kind: str, items: List[Dict[str, str]], batch_size: int = 10,
+                    should_stop: Optional[Callable[[], bool]] = None,
+                    on_progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, str]:
+    """Translate many names with few model calls.
+
+    ``items`` are ``{"original": core text, "artist": ..., "album": ...}``;
+    names that already have a record are skipped. Each prompt carries
+    ``batch_size`` names, so the model is loaded once and stays warm for the
+    whole run instead of being called once per name. Returns
+    ``{original: translation}`` for everything now on record.
+    """
+    language = str(config.get("translate.target_language") or "English")
+    batch_size = max(1, min(int(batch_size or 10), 50))
+    done: Dict[str, str] = {}
+    pending: List[Dict[str, str]] = []
+    seen = set()
+    for item in items:
+        core = str(item.get("original") or "").strip()
+        if not core or core in seen:
+            continue
+        seen.add(core)
+        row = _usable(kind, core, store.find_translation(kind, core))
+        if row and row.get("translated"):
+            done[core] = str(row["translated"])
+        else:
+            pending.append({**item, "original": core})
+
+    total = len(pending)
+    finished = 0
+    for start in range(0, total, batch_size):
+        if should_stop and should_stop():
+            break
+        chunk = pending[start:start + batch_size]
+        payload: Dict[str, object] = {"kind": _KIND_LABEL.get(kind, kind), "items": []}
+        for index, item in enumerate(chunk, 1):
+            entry: Dict[str, object] = {"id": index, "original": item["original"]}
+            for key in ("artist", "album"):
+                value = item.get(key)
+                if value and value != item["original"]:
+                    entry[key] = value
+            payload["items"].append(entry)  # type: ignore[union-attr]
+        try:
+            data = ollama.chat_json("names", _system_prompt(language), payload, _SCHEMA, temperature=0.1,
+                                    num_ctx=8192)
+        except ollama.OllamaError as exc:
+            logger.warning("Batch translation failed (%s names): %s", len(chunk), exc)
+            if not ollama.available():
+                break   # the server is down: stop instead of failing every remaining batch
+            data = {}
+        answers: Dict[int, str] = {}
+        for entry in data.get("translations") or []:
+            if isinstance(entry, dict):
+                try:
+                    answers[int(entry.get("id"))] = _clean(entry.get("translation"))
+                except (TypeError, ValueError):
+                    continue
+        for index, item in enumerate(chunk, 1):
+            candidate = answers.get(index, "")
+            if not _valid(candidate, item["original"]):
+                # a batch answer can be missing or malformed for one name; ask for it alone
+                candidate = _ask_model(kind, item["original"], item)
+            if candidate:
+                store.save_translation(kind, item["original"], candidate, model=config.model_for("names"))
+                done[item["original"]] = candidate
+        finished += len(chunk)
+        if on_progress:
+            on_progress(finished, total)
+    return done

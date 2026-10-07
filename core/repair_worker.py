@@ -6445,3 +6445,27 @@ def _fork_fix_comma_artist_split(self, entity_type, entity_id, file_path, detail
 
 
 RepairWorker._fix_comma_artist_split = _fork_fix_comma_artist_split
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The fork's tools (core/fork/jobs.py): how their findings are labelled,
+# which family they sit in, and what fixes them. See FORK.md.
+FINDING_TYPE_META.update({
+    'fork_untranslated':   {'label': 'Untranslated Names', 'verb': 'Apply Translation'},
+    'fork_album_volumes':  {'label': 'Album Volumes', 'verb': 'Group Volumes'},
+})
+JOB_CATEGORIES.update({
+    'fork_auto_translate': 'Tags & metadata',
+    'fork_volume_grouping': 'Tags & metadata',
+})
+_upstream_fix_handlers = RepairWorker._fix_handlers
+
+
+def _fork_fix_handlers(self):
+    from core.fork import jobs as _fork_jobs
+    handlers = dict(_upstream_fix_handlers(self))
+    handlers.update(_fork_jobs.fix_handlers(self))
+    return handlers
+
+
+RepairWorker._fix_handlers = _fork_fix_handlers

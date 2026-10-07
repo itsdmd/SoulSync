@@ -78,3 +78,8 @@ def _import_all_jobs():
             importlib.import_module(module_name)
         except Exception as e:
             logger.error("Failed to import job module %s: %s", module_name, e)
+
+
+# fork (itsdmd/SoulSync): the fork's own tools (auto translate, volume
+# grouping) register like any other job. See FORK.md.
+_JOB_MODULES.append('core.repair_jobs.fork_tools')
