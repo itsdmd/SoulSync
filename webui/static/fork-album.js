@@ -157,13 +157,27 @@
         const list = el('div', { class: 'fork-album-dirlist' });
         const crumb = el('div', { class: 'fork-album-crumb' });
         let current = '';
+        let searchTimer = null;
+        let searchSeq = 0;
+        const search = el('input', {
+            class: 'fork-album-input fork-album-search', type: 'search',
+            placeholder: 'Search your library for a folder (artist or album name)…',
+            'aria-label': 'Search library folders',
+            oninput: () => {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(runSearch, 250);
+            },
+            onkeydown: (e) => {
+                if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; runSearch(); }
+            },
+        });
         const pick = el('button', {
             class: 'download-control-btn primary', type: 'button', text: 'Use this folder', disabled: true,
             onclick: () => { onPick(current); root.remove(); },
         });
         const root = overlay('fork-album-browser', [
             el('h3', { text: 'Choose the album folder' }),
-            crumb, list,
+            search, crumb, list,
             el('div', { class: 'fork-album-actions' }, [
                 el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
                 pick,
@@ -200,7 +214,39 @@
             if (!data.dirs.length) rows.push(el('div', { class: 'fork-album-note', text: 'No sub-folders here.' }));
             list.replaceChildren(...rows);
         }
+        // Search the whole library by folder name; picking a result opens that
+        // folder in the browser so its contents can be checked before using it.
+        async function runSearch() {
+            const query = search.value.trim();
+            const seq = ++searchSeq;
+            if (!query) { load(current); return; }
+            pick.disabled = true;
+            crumb.textContent = `Searching for “${query}”…`;
+            let data;
+            try {
+                data = await api('/search-folders?q=' + encodeURIComponent(query));
+            } catch (err) {
+                if (seq !== searchSeq) return;
+                list.replaceChildren(el('div', { class: 'fork-album-note', text: err.message }));
+                return;
+            }
+            if (seq !== searchSeq) return;   // a newer search (or a cleared box) superseded this one
+            crumb.textContent = `${data.results.length}${data.truncated ? '+' : ''} folder${data.results.length === 1 ? '' : 's'} matching “${query}”`;
+            if (!data.results.length) {
+                list.replaceChildren(el('div', { class: 'fork-album-note', text: 'No folder with that name in your library.' }));
+                return;
+            }
+            list.replaceChildren(...data.results.map((dir) => el('button', {
+                class: 'fork-album-dir fork-album-result', type: 'button', title: dir.path,
+                onclick: () => { search.value = ''; searchSeq++; load(dir.path); },
+            }, [
+                el('span', {}, [el('strong', { text: dir.name }), el('em', { text: dir.rel })]),
+                dir.audio ? el('small', { text: `${dir.audio} audio` }) : null,
+            ])));
+        }
+
         load(start || '');
+        setTimeout(() => search.focus(), 0);
     }
 
     // ── 3. auto-tag review ───────────────────────────────────────────────

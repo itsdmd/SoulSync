@@ -183,3 +183,35 @@ def test_apply_with_rename_never_overwrites_an_existing_file(library, monkeypatc
     assert result["written"] == 2 and result["moved"] == 1
     assert "already exists" in result["results"][1]["rename_error"]
     assert os.path.isfile(str(folder / "b.flac"))  # the second file stays put, tagged
+
+
+def test_search_folders_finds_albums_by_any_words_across_the_library(library):
+    _flac(str(library / "Jay Chou" / "Jay Chou - November's Chopin (十一月的蕭邦)" / "01.flac"))
+    _flac(str(library / "Jay Chou" / "Jay Chou - Fantasy" / "01.flac"))
+    _flac(str(library / "Björk" / "Björk - Post" / "Disc 1" / "01.flac"))
+    (library / ".hidden" / "chopin secret").mkdir(parents=True)
+
+    def rels(query):
+        return [r["rel"] for r in album_tagging.search_folders(query)["results"]]
+
+    assert rels("chopin") == ["Jay Chou/Jay Chou - November's Chopin (十一月的蕭邦)"]
+    assert rels("十一月") == ["Jay Chou/Jay Chou - November's Chopin (十一月的蕭邦)"]
+    # every word must match, in any order, across the path; accents and case ignored
+    assert rels("FANTASY chou") == ["Jay Chou/Jay Chou - Fantasy"]
+    assert rels("bjork post") == ["Björk/Björk - Post"]
+    assert rels("chopin bjork") == []
+    # folders holding audio rank above their artist folder
+    assert rels("jay chou") == ["Jay Chou/Jay Chou - Fantasy",
+                                "Jay Chou/Jay Chou - November's Chopin (十一月的蕭邦)", "Jay Chou"]
+    # a parent matching every word does not drag all of its sub-folders in
+    # ("Disc 1" is not listed: its own name matches nothing)
+    assert rels("bjork") == ["Björk", "Björk/Björk - Post"]
+    assert rels("   ") == []
+    assert all(r["path"].startswith(os.path.realpath(str(library))) for r in album_tagging.search_folders("o")["results"])
+
+
+def test_search_folders_stops_at_the_limit(library):
+    for i in range(6):
+        (library / f"Artist {i}").mkdir()
+    data = album_tagging.search_folders("artist", limit=4)
+    assert len(data["results"]) == 4 and data["truncated"] is True

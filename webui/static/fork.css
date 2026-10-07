@@ -394,3 +394,30 @@ select.fork-album-input { max-width: 240px; }
 select.fork-album-input option { background: #181818; }
 .fork-album-num { width: 54px; }
 .fork-album-year { width: 90px; }
+
+.fork-album-search { flex-shrink: 0; padding: 8px 10px; }
+.fork-album-search::-webkit-search-cancel-button { cursor: pointer; }
+
+.fork-album-result span {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.fork-album-result strong { font-weight: 600; }
+
+.fork-album-result em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: normal;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.fork-album-dialog .download-control-btn:disabled,
+.fork-album-bar .download-control-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    box-shadow: none;
+}

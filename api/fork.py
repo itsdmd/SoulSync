@@ -224,6 +224,14 @@ def album_browse():
         return _folder_error(exc)
 
 
+@bp.route("/api/fork/album/search-folders", methods=["GET"])
+@admin_only
+def album_search_folders():
+    from core.fork import album_tagging
+
+    return jsonify(success=True, **album_tagging.search_folders(request.args.get("q") or ""))
+
+
 @bp.route("/api/fork/album/tag-preview", methods=["POST"])
 @admin_only
 def album_tag_preview():

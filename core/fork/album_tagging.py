@@ -117,6 +117,62 @@ def browse(path: Optional[str] = None) -> Dict[str, Any]:
     return {"path": real, "parent": parent, "roots": roots, "dirs": dirs, "audio": _count_audio(real)}
 
 
+def _fold(text: str) -> str:
+    """Case- and accent-insensitive form for folder-name search."""
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+
+
+def search_folders(query: str, limit: int = 100, max_depth: int = 4,
+                   max_scanned: int = 80_000) -> Dict[str, Any]:
+    """Folders anywhere in the library whose path matches every word of
+    ``query`` (any order; case and accents ignored). A word may match the
+    folder's own name or a parent's, so "chou november" finds
+    ``Jay Chou/November's Chopin`` — but the folder's own name must match at
+    least one word, otherwise every sub-folder of a matching artist would
+    be listed."""
+    terms = [t for t in _fold(query or "").split() if t]
+    if not terms:
+        return {"results": [], "truncated": False}
+    results: List[Dict[str, Any]] = []
+    scanned = 0
+    truncated = False
+    for root in allowed_roots():
+        stack = [(root, "", 0)]
+        while stack:
+            current, rel, depth = stack.pop()
+            try:
+                entries = sorted((e for e in os.scandir(current)
+                                  if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")),
+                                 key=lambda e: e.name.casefold(), reverse=True)
+            except OSError:
+                continue
+            for entry in entries:
+                scanned += 1
+                child_rel = f"{rel}/{entry.name}" if rel else entry.name
+                own, whole = _fold(entry.name), _fold(child_rel)
+                if all(t in whole for t in terms) and any(t in own for t in terms):
+                    results.append({"name": entry.name, "path": entry.path, "rel": child_rel,
+                                    "root": root, "audio": _count_audio(entry.path)})
+                    if len(results) >= limit:
+                        return {"results": _rank(results, terms), "truncated": True}
+                if depth + 1 < max_depth:
+                    stack.append((entry.path, child_rel, depth + 1))
+            if scanned >= max_scanned:
+                truncated = True
+                break
+    return {"results": _rank(results, terms), "truncated": truncated}
+
+
+def _rank(results: List[Dict[str, Any]], terms: List[str]) -> List[Dict[str, Any]]:
+    """Folders that hold audio first (an album, not an artist), then the ones
+    whose own name carries more of the query, then by path."""
+    def key(item: Dict[str, Any]):
+        own = _fold(item["name"])
+        return (0 if item["audio"] else 1, -sum(1 for t in terms if t in own), item["rel"].casefold())
+    return sorted(results, key=key)
+
+
 # ── release payload helpers ─────────────────────────────────────────────
 
 def _artist_names(track: Dict[str, Any]) -> List[str]:
