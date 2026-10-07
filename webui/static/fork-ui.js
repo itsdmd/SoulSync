@@ -26,6 +26,7 @@
     ];
 
     let settings = null;
+    let defaults = { artists: { detect: '' } };
     let tasks = {};
     let overlay = null;
 
@@ -182,19 +183,46 @@
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
         ]);
 
-        // Artists: separate tags and a custom separator are mutually exclusive —
+        // Artists: separate tags and a chosen separator are mutually exclusive —
         // the separator only exists when everything goes into one tag.
         settings.artists = settings.artists || {};
+        const PRESETS = { semicolon: '; ', comma: ', ', slash: ' / ', ampersand: ' & ' };
+        // mirrors pad_separator() in core/fork/artist_format.py
+        const padded = (chars) => {
+            const c = (chars || '').trim();
+            if (!c) return '; ';
+            if (/^[\u3000-\u303F\uFF00-\uFFEF\u30FB]+$/.test(c)) return c;
+            if (c === ',' || c === ';') return c + ' ';
+            return ` ${c} `;
+        };
         const separatorSelect = el('select', {
-            class: 'fork-select', disabled: !!settings.artists.split_tags,
-            onchange: (e) => { settings.artists.separator = e.target.value; },
-        }, [['semicolon', 'Semicolon —  A; B'], ['comma', 'Comma —  A, B'], ['slash', 'Slash —  A / B'], ['ampersand', 'Ampersand —  A & B']]
+            class: 'fork-select',
+            onchange: (e) => { settings.artists.separator = e.target.value; syncSeparator(); },
+        }, [['semicolon', 'Semicolon —  A; B'], ['comma', 'Comma —  A, B'], ['slash', 'Slash —  A / B'],
+            ['ampersand', 'Ampersand —  A & B'], ['custom', 'Custom…']]
             .map(([value, text]) => el('option', { value, text, selected: (settings.artists.separator || 'semicolon') === value })));
+        const customInput = el('input', {
+            class: 'fork-input', style: 'flex:0 0 90px', maxlength: '6', placeholder: 'e.g. 、',
+            'aria-label': 'Custom separator', value: settings.artists.custom_separator || '',
+            oninput: (e) => { settings.artists.custom_separator = e.target.value; syncSeparator(); },
+        });
         const separatorHelp = el('span', { class: 'fork-help' });
         const syncSeparator = () => {
-            separatorSelect.disabled = !!settings.artists.split_tags;
-            separatorHelp.textContent = settings.artists.split_tags ? 'Not used while artists are split into separate tags.' : '';
+            const split = !!settings.artists.split_tags;
+            const custom = (settings.artists.separator || 'semicolon') === 'custom';
+            separatorSelect.disabled = split;
+            customInput.disabled = split;
+            customInput.style.display = custom ? '' : 'none';
+            const sep = custom ? padded(settings.artists.custom_separator) : (PRESETS[settings.artists.separator] || '; ');
+            separatorHelp.textContent = split
+                ? 'Not used while artists are split into separate tags.'
+                : `Written as:  Artist A${sep}Artist B`;
         };
+        const detectInput = el('input', {
+            class: 'fork-input', 'aria-label': 'Extra separators to detect',
+            value: settings.artists.detect != null ? settings.artists.detect : '',
+            oninput: (e) => { settings.artists.detect = e.target.value; },
+        });
         syncSeparator();
         const artists = el('div', { class: 'fork-section' }, [
             el('h3', { text: 'Multiple artists' }),
@@ -207,7 +235,19 @@
                     text: 'Writes one tag per artist (ARTIST=Artist A, ARTIST=Artist B) instead of one combined value. Applies to Artist and Album artist, on downloads, imports and auto-tagging.',
                 })]),
             ]),
-            el('div', { class: 'fork-row' }, [el('label', { text: 'Separator in a combined tag' }), separatorSelect, separatorHelp]),
+            el('div', { class: 'fork-row' }, [el('label', { text: 'Separator in a combined tag' }), separatorSelect, customInput, separatorHelp]),
+            el('div', { class: 'fork-row' }, [
+                el('label', { text: 'Also detect as separators' }),
+                detectInput,
+                el('button', {
+                    class: 'fork-btn', type: 'button', text: 'Defaults', title: 'Restore the default list',
+                    onclick: () => { settings.artists.detect = defaults.artists.detect; detectInput.value = defaults.artists.detect; },
+                }),
+            ]),
+            el('p', { class: 'fork-note', style: 'margin:4px 0 0', text:
+                'Separate each with a space. Always detected: , ; and, between spaces, & / + feat. ft. featuring with vs. x. '
+                + 'Punctuation you add here (、 ／ × •) splits wherever it appears; a letter or plain symbol (x | +) only between spaces. '
+                + 'A name your rules or MusicBrainz know as one artist is never split.' }),
         ]);
 
         const features = el('div', { class: 'fork-section' }, [el('h3', { text: 'Features' })]);
@@ -436,6 +476,7 @@
             const data = await api('/settings');
             settings = data.settings;
             tasks = data.tasks;
+            if (data.defaults) defaults = data.defaults;
         } catch (err) { toast(err.message, 'error'); return; }
 
         const body = el('div', { class: 'fork-body' });

@@ -648,14 +648,36 @@ CommaArtistSplitterJob.default_settings = {
     **CommaArtistSplitterJob.default_settings,
     'split_into_separate_tags': True,
     'separator': 'semicolon',
+    'custom_separator': '',
+    # extra characters the scan also treats as separators (space-separated)
+    'extra_splitters': '、 ， ； ／ ＆ ＋ ｜ | • ・ × ✕ ✖',
 }
 CommaArtistSplitterJob.setting_options = {
     **(CommaArtistSplitterJob.setting_options or {}),
-    'separator': ['semicolon', 'comma', 'slash', 'ampersand'],
+    'separator': ['semicolon', 'comma', 'slash', 'ampersand', 'custom'],
 }
 CommaArtistSplitterJob.help_text += (
     '\n- Split Into Separate Tags: write one artist tag per artist (ARTIST=A, ARTIST=B) '
     'instead of one joined value. Also applied to the album artist.'
     '\n- Separator: the character used between artists when the tag is NOT split '
-    '(ignored while Split Into Separate Tags is on).'
+    '(ignored while Split Into Separate Tags is on). Pick Custom to use your own.'
+    '\n- Custom Separator: your own separator character, used when Separator is Custom.'
+    '\n- Extra Splitters: more characters to treat as separators when scanning, '
+    'separated by spaces. Defaults to the ones CJK releases use (、 ， ／ • ・ × …).'
 )
+
+_upstream_get_symbols = CommaArtistSplitterJob._get_symbols
+
+
+def _fork_get_symbols(self, settings: dict) -> list:
+    """Upstream's enabled separators plus the user's extra ones. Upstream
+    drops the symbols into a regex character class unescaped, so only single
+    characters that are safe there are passed on."""
+    symbols = list(_upstream_get_symbols(self, settings))
+    for token in str(settings.get('extra_splitters') or '').split():
+        if len(token) == 1 and token not in '\\]^-[' and not token.isalnum() and token not in symbols:
+            symbols.append(token)
+    return symbols
+
+
+CommaArtistSplitterJob._get_symbols = _fork_get_symbols

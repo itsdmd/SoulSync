@@ -64,8 +64,13 @@ def defaults() -> Dict[str, Any]:
             # Several artists on one track: write one tag value per artist
             # (ARTIST=A, ARTIST=B). Applies to ALBUMARTIST too.
             "split_tags": True,
-            # Only used when split_tags is off: semicolon | comma | slash | ampersand
+            # Only used when split_tags is off: semicolon | comma | slash |
+            # ampersand | custom (-> custom_separator)
             "separator": "semicolon",
+            "custom_separator": "",
+            # Extra separators to DETECT when splitting a credit, space-separated,
+            # on top of the built-in , ; & / + feat. ft. featuring with vs. x
+            "detect": "、 ， ； ／ ＆ ＋ ｜ | • ・ × ✕ ✖ ｘ",
         },
         "import": {
             # The automatic import watcher moves/renames only, leaving file

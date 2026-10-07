@@ -33,7 +33,11 @@ def job_settings(worker: Any) -> Dict[str, Any]:
     split = stored.get("split_into_separate_tags", True)
     if isinstance(split, str):
         split = split.strip().lower() != "false"
-    return {"split": bool(split), "separator": str(stored.get("separator") or "semicolon")}
+    name = str(stored.get("separator") or "semicolon").strip().lower()
+    if name == artist_format.CUSTOM:
+        # the job has its own custom separator, independent of the global one
+        name = "literal:" + str(stored.get("custom_separator") or "").strip()
+    return {"split": bool(split), "separator": name}
 
 
 def _norm(value: Any) -> str:

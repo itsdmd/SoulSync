@@ -393,6 +393,8 @@ function JobSettings({
                 className="repair-setting-input"
                 data-job={job.job_id}
                 data-key={key}
+                disabled={isRepairSettingLocked(job.job_id, key, values)} // fork
+                title={repairSettingLockReason(job.job_id, key, values)}
                 value={settingText(current)}
                 onChange={(event) =>
                   setValues((previous) => ({ ...previous, [key]: event.target.value }))

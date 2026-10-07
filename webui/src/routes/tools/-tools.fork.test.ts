@@ -29,4 +29,36 @@ describe('comma artist splitter: separator lock', () => {
     );
     expect(isRepairSettingLocked('library_retag', 'separator', on)).toBe(false);
   });
+
+  it('opens the custom separator only when splitting is off and Separator is Custom', () => {
+    const job = 'comma_artist_splitter';
+    expect(
+      isRepairSettingLocked(job, 'custom_separator', {
+        split_into_separate_tags: true,
+        separator: 'custom',
+      }),
+    ).toBe(true);
+    expect(
+      isRepairSettingLocked(job, 'custom_separator', {
+        split_into_separate_tags: false,
+        separator: 'comma',
+      }),
+    ).toBe(true);
+    expect(
+      repairSettingLockReason(job, 'custom_separator', {
+        split_into_separate_tags: false,
+        separator: 'comma',
+      }),
+    ).toMatch(/Custom/);
+    expect(
+      isRepairSettingLocked(job, 'custom_separator', {
+        split_into_separate_tags: false,
+        separator: 'custom',
+      }),
+    ).toBe(false);
+    // what to detect is independent of how the result is written
+    expect(isRepairSettingLocked(job, 'extra_splitters', { split_into_separate_tags: true })).toBe(
+      false,
+    );
+  });
 });

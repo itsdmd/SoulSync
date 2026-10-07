@@ -191,7 +191,9 @@ def test_splitter_job_exposes_the_settings_with_tag_splitting_on_by_default():
 
     assert CommaArtistSplitterJob.default_settings["split_into_separate_tags"] is True
     assert CommaArtistSplitterJob.default_settings["separator"] == "semicolon"
-    assert CommaArtistSplitterJob.setting_options["separator"] == ["semicolon", "comma", "slash", "ampersand"]
+    assert CommaArtistSplitterJob.setting_options["separator"] == ["semicolon", "comma", "slash", "ampersand", "custom"]
+    assert CommaArtistSplitterJob.default_settings["custom_separator"] == ""
+    assert "、" in CommaArtistSplitterJob.default_settings["extra_splitters"].split()
     assert CommaArtistSplitterJob.default_settings["dry_run"] is True      # upstream settings intact
     assert RepairWorker._fix_comma_artist_split.__name__ == "_fork_fix_comma_artist_split"
 
@@ -223,3 +225,86 @@ def test_upstream_fix_then_fork_strategy_end_to_end(tmp_path, monkeypatch):
     # running the fix again finds nothing left to do and changes nothing
     again = worker._fix_comma_artist_split("track", "A, B", None, details)
     assert again["success"] and FLAC(path)["artist"] == ["A", "B"]
+
+
+# ── configurable separators ─────────────────────────────────────────────
+
+def test_cjk_separators_are_detected_by_default():
+    parts = artist_format.raw_parts
+    assert parts("周杰倫、方文山") == ["周杰倫", "方文山"]
+    assert parts("周杰倫／方文山") == ["周杰倫", "方文山"]
+    assert parts("A，B；C") == ["A", "B", "C"]
+    assert parts("ヨルシカ×米津玄師") == ["ヨルシカ", "米津玄師"]
+    assert parts("A • B") == ["A", "B"] and parts("A・B") == ["A", "B"] and parts("A＆B") == ["A", "B"]
+    assert parts("A ｘ B") == ["A", "B"] and parts("A | B") == ["A", "B"]
+    # still whole: no spaces around a letter/ASCII symbol, or not a separator at all
+    assert parts("AxB") == ["AxB"] and parts("A|B") == ["A|B"] and parts("AC/DC") == ["AC/DC"]
+    assert parts("乔治·马丁") == ["乔治·马丁"]            # the Chinese interpunct is not a default
+
+
+def test_a_katakana_name_with_a_middle_dot_is_one_artist():
+    assert artist_format.raw_parts("マイケル・ジャクソン") == ["マイケル・ジャクソン"]
+    assert artist_format.raw_parts("周杰倫、マイケル・ジャクソン") == ["周杰倫", "マイケル・ジャクソン"]
+    assert artist_format.raw_parts("米津玄師・ヨルシカ") == ["米津玄師", "ヨルシカ"]   # not all-katakana: a real separator
+
+
+def test_user_can_add_and_remove_detected_separators(fork_env):
+    fork_env.set("fork.artists.detect", "· と ~~")
+    parts = artist_format.raw_parts
+    assert parts("乔治·马丁") == ["乔治", "马丁"]         # added
+    assert parts("A と B") == ["A", "B"] and parts("AとB") == ["AとB"]   # a word needs spaces
+    assert parts("A~~B") == ["A~~B"] and parts("A ~~ B") == ["A", "B"]  # ASCII symbol needs spaces
+    assert parts("周杰倫、方文山") == ["周杰倫、方文山"]     # removed from the list
+    assert parts("A, B & C") == ["A", "B", "C"]            # built-ins always apply
+    fork_env.set("fork.artists.detect", "")
+    assert parts("A×B") == ["A×B"] and parts("A; B") == ["A", "B"]
+
+
+def test_regex_special_characters_are_safe_to_add(fork_env):
+    fork_env.set("fork.artists.detect", "] [ \\ ^ - . * ( )")
+    assert artist_format.raw_parts("A ] B") == ["A", "B"]
+    assert artist_format.raw_parts("A.B") == ["A.B"] and artist_format.raw_parts("A . B") == ["A", "B"]
+
+
+def test_custom_output_separator(fork_env):
+    fork_env.set("fork.artists.split_tags", False)
+    fork_env.set("fork.artists.separator", "custom")
+    for chars, text in (("、", "A、B"), ("／", "A／B"), ("|", "A | B"), ("•", "A • B"), (",", "A, B"), ("x", "A x B")):
+        fork_env.set("fork.artists.custom_separator", chars)
+        assert artist_format.tag_values(["A", "B"]) == [text]
+    fork_env.set("fork.artists.custom_separator", "")
+    assert artist_format.tag_values(["A", "B"]) == ["A; B"]          # empty custom falls back
+    # the custom separator is itself detected again when it is a known one, so a
+    # second pass over the file is a no-op
+    fork_env.set("fork.artists.custom_separator", "、")
+    assert artist_format.raw_parts("A、B") == ["A", "B"]
+
+
+def test_download_pass_splits_cjk_credits_and_writes_a_custom_separator(tmp_path, fork_env):
+    path = _flac(tmp_path, artist="周杰倫、方文山／Lara")
+    tags.apply_to_file(path)
+    assert FLAC(path)["artist"] == ["周杰倫", "方文山", "Lara"]
+    fork_env.set("fork.artists.split_tags", False)
+    fork_env.set("fork.artists.separator", "custom")
+    fork_env.set("fork.artists.custom_separator", "、")
+    tags.apply_to_file(path)
+    assert FLAC(path)["artist"] == ["周杰倫、方文山、Lara"]
+    assert tags.apply_to_file(path) == {}
+
+
+def test_splitter_job_custom_separator_and_extra_scan_characters(tmp_path, monkeypatch):
+    from core.repair_jobs.comma_artist_splitter import CommaArtistSplitterJob, split_artist_parts
+
+    audio, result = _split(tmp_path, {"split_into_separate_tags": False, "separator": "custom",
+                                      "custom_separator": "、"}, monkeypatch)
+    assert audio["artist"] == ["A、B"] and audio["albumartist"] == ["A、B"] and "A、B" in result["message"]
+    job = CommaArtistSplitterJob()
+    symbols = job._get_symbols({**job.default_settings})
+    assert symbols[:4] == [",", ";", "/", "&"] and "、" in symbols and "／" in symbols and "×" in symbols
+    assert split_artist_parts("周杰倫、方文山／Lara×A", symbols) == ["周杰倫", "方文山", "Lara", "A"]
+    # unsafe-in-a-character-class and multi-character entries are dropped, not passed to upstream's regex
+    risky = job._get_symbols({**job.default_settings, "extra_splitters": "] ^ - \\\\ ab x ｜"})
+    assert risky == [",", ";", "/", "&", "｜"]
+    assert split_artist_parts("A｜B", risky) == ["A", "B"]
+    # switching an upstream toggle off still works alongside the extras
+    assert "," not in job._get_symbols({**job.default_settings, "comma_splitter": False})
