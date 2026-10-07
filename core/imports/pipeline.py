@@ -2183,3 +2183,24 @@ def _apply_profile_output_transforms(final_path: str, context: dict, profile: di
     if isinstance(context, dict) and context.get('_fork_rename_only'):
         return final_path
     return _upstream_apply_profile_output_transforms(final_path, context, profile)
+
+
+# fork: a file the pipeline declined to file — most often "[Protection] Incoming
+# file is not a verified improvement" when the library already holds that track
+# at the same quality — returned normally and was reported as a successful
+# import, although the file never left the import folder. Report the reason.
+_upstream_import_rejection_reason = import_rejection_reason
+
+
+def import_rejection_reason(context: dict) -> str | None:  # noqa: F811
+    reason = _upstream_import_rejection_reason(context)
+    if reason:
+        return reason
+    skipped = context.get('_context_failure_msg') if isinstance(context, dict) else None
+    if skipped:
+        text = str(skipped)
+        if 'not a verified improvement' in text:
+            return ('not imported: the library already has this track at the same or better quality '
+                    '(turn off "Replace lower quality" or delete the library copy to import it anyway)')
+        return f"not imported: {text}"
+    return None

@@ -147,7 +147,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/metadata/enrichment.py` | EOF wrapper around `enhance_file_metadata` (tag pass; rename-only skip) |
 | `core/metadata/lyrics.py` | EOF wrapper around `generate_lrc_file` (rename-only skip) |
 | `core/lyrics_client.py` | EOF wrapper around `LyricsClient.create_lrc_file` (lyrics translation) |
-| `core/imports/pipeline.py` | ReplayGain condition; EOF wrapper around `_apply_profile_output_transforms` |
+| `core/imports/pipeline.py` | ReplayGain condition; EOF wrappers around `_apply_profile_output_transforms` and `import_rejection_reason` (a skipped track is reported, not counted as imported) |
 | `core/imports/routes.py` | 2 × `mark_rename_only(...)` |
 | `core/auto_import_worker.py` | 2 lines: rename-only for the watcher |
 | `core/imports/file_ops.py` | EOF wrappers: `move_companion_sidecars`, `downsample_hires_flac` (lyrics backup follows the track) |

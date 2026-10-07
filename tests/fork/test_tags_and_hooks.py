@@ -148,3 +148,17 @@ def test_watcher_rename_only_follows_the_setting(fork_env):
     context = {}
     hooks.mark_rename_only(context, hooks.auto_import_rename_only())
     assert hooks.is_rename_only(context)
+
+
+def test_a_track_the_pipeline_declined_to_file_is_reported_not_counted_as_imported():
+    from core.imports.pipeline import import_rejection_reason
+
+    assert import_rejection_reason({}) is None
+    skipped = import_rejection_reason(
+        {"_context_failure_msg": "Incoming file is not a verified improvement under the quality profile"})
+    assert skipped.startswith("not imported: the library already has this track")
+    assert import_rejection_reason({"_context_failure_msg": "Missing artist context"}) == \
+        "not imported: Missing artist context"
+    # upstream's own reasons still win
+    assert import_rejection_reason({"_integrity_failure_msg": "truncated", "_context_failure_msg": "x"}) == \
+        "integrity check failed: truncated"
