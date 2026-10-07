@@ -44,6 +44,11 @@ services:
     networks:
       - default
       - ollama-net
+      # SoulSync addresses these services by container name (http://soulseek:5030,
+      # http://prowlarr:9696, http://qbittorrent:9191, http://sabnzbd-hot:8080), so
+      # it has to sit on their stacks' networks.
+      - soulseek_default
+      - servarr_default
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
@@ -68,4 +73,8 @@ volumes:
 #     networks: { ollama-net: { external: true } }
 networks:
   ollama-net:
+    external: true
+  soulseek_default:
+    external: true
+  servarr_default:
     external: true
