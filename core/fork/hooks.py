@@ -194,6 +194,20 @@ def owned_by_external_id(db: Any, track: Any, server_source: Optional[str] = Non
         return None
 
 
+def completion_with_saved_folder(result: Any, album: Any, artist_name: Any, source: Any = None) -> Any:
+    """Discography card: count the folder the user picked for the album."""
+    if not _active():
+        return result
+    try:
+        from core.fork import album_tagging
+
+        return album_tagging.completion_from_saved_folder(
+            result, album if isinstance(album, dict) else {}, str(artist_name or ""), source or "")
+    except Exception as exc:
+        logger.debug("completion_with_saved_folder failed: %s", exc)
+        return result
+
+
 # ── lyrics backups (<name>.original.lrc) follow their track ─────────────
 # Deliberately NOT gated on _active(): these only ever act on files the fork
 # itself created, and must keep working if the feature is later switched off.

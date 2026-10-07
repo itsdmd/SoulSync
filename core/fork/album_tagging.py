@@ -338,6 +338,40 @@ def save_folder(source: Any, album: Dict[str, Any], artist: Dict[str, Any], fold
     return real
 
 
+def count_audio_deep(folder: str) -> int:
+    """Audio files in ``folder`` and its disc sub-folders. Reads no tags."""
+    exts, total = _audio_exts(), 0
+    base_depth = folder.rstrip(os.sep).count(os.sep)
+    for current, dirs, names in os.walk(folder):
+        if current.count(os.sep) - base_depth >= _MAX_DEPTH:
+            dirs[:] = []
+        total += sum(1 for name in names if os.path.splitext(name)[1].lower() in exts)
+    return total
+
+
+def completion_from_saved_folder(result: Dict[str, Any], album: Dict[str, Any], artist_name: str,
+                                 source: Any = "") -> Dict[str, Any]:
+    """Raise a discography card's owned count to what the album's saved folder
+    holds. Never lowers it: the library's own answer stands when it is higher."""
+    if not isinstance(result, dict) or result.get("status") == "completed":
+        return result
+    folder = saved_folder(source, album, {"name": artist_name})["folder"]
+    if not folder:
+        return result
+    expected = _int(result.get("expected_tracks")) or _int((album or {}).get("total_tracks"))
+    held = count_audio_deep(folder)
+    owned = min(held, expected) if expected else held
+    if owned <= _int(result.get("owned_tracks")):
+        return result
+    out = dict(result)
+    out["owned_tracks"] = owned
+    out["expected_tracks"] = expected or owned
+    out["completion_percentage"] = round(owned / (expected or owned) * 100, 1)
+    out["status"] = "completed" if owned >= (expected or owned) else "partial"
+    out["saved_folder"] = folder
+    return out
+
+
 def _library_match(db: Any, album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, Any],
                    server_source: Optional[str]) -> Any:
     match = None

@@ -475,3 +475,34 @@ def test_a_saved_folder_follows_the_files_when_tagging_moves_them(library, monke
     out = album_tagging.apply(folder, rows, ALBUM, ARTIST, TRACKS, source="spotify", rename=True)
     assert out["moved"] == 2 and out["folder"] == new_home
     assert album_tagging.saved_folder("spotify", ALBUM, ARTIST)["folder"] == new_home
+
+
+def test_discography_count_uses_the_saved_folder_and_never_lowers(library):
+    folder = _album_on_disk(library)
+    card = {"id": "al1", "name": ALBUM["name"], "total_tracks": 3}
+    missing = {"id": "al1", "status": "missing", "owned_tracks": 0, "expected_tracks": 3, "completion_percentage": 0}
+    # nothing saved: untouched
+    assert album_tagging.completion_from_saved_folder(missing, card, "周杰倫", "spotify") is missing
+
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    # asked without a source and under the library's name for the artist: found by id
+    out = album_tagging.completion_from_saved_folder(missing, card, "Jay Chou", None)
+    assert (out["owned_tracks"], out["status"], out["completion_percentage"]) == (2, "partial", 66.7)
+    _flac(os.path.join(folder, "Disc 2", "03.flac"), title="Duet")
+    _flac(os.path.join(folder, "Disc 2", "04 extra.flac"), title="Extra")
+    out = album_tagging.completion_from_saved_folder(missing, card, "周杰倫", "spotify")
+    assert (out["owned_tracks"], out["status"]) == (3, "completed")   # capped at the album's size
+    done = dict(missing, status="completed", owned_tracks=3)
+    assert album_tagging.completion_from_saved_folder(done, card, "周杰倫", "spotify") is done
+
+
+def test_completion_check_is_wrapped_and_counts_the_saved_folder(library, monkeypatch):
+    from core.metadata import completion
+
+    folder = _album_on_disk(library)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    monkeypatch.setattr(completion, "_upstream_check_album_completion", lambda db, album, artist, source=None, *a, **k: {
+        "id": album["id"], "status": "missing", "owned_tracks": 0, "expected_tracks": 3, "completion_percentage": 0})
+    out = completion.check_album_completion(None, {"id": "al1", "name": ALBUM["name"], "total_tracks": 3}, "周杰倫",
+                                            source_override="spotify", candidate_albums=[])
+    assert out["owned_tracks"] == 2 and out["status"] == "partial"

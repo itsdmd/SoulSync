@@ -289,6 +289,11 @@ def get_album_folder(source: str, album_id: str, name_key: str = "") -> Optional
         if album_id:
             row = conn.execute("SELECT * FROM fork_album_folders WHERE source = ? AND album_id = ?",
                                (source, album_id)).fetchone()
+        if row is None and album_id and not album_id.startswith("name:"):
+            # the same id asked about without (or with another spelling of) its source
+            row = conn.execute(
+                "SELECT * FROM fork_album_folders WHERE album_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (album_id,)).fetchone()
         if row is None and name_key:
             row = conn.execute(
                 "SELECT * FROM fork_album_folders WHERE name_key = ? ORDER BY updated_at DESC LIMIT 1",
