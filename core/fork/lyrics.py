@@ -47,12 +47,6 @@ def _system_prompt(language: str) -> str:
     )
 
 
-def _lang_code() -> str:
-    language = str(config.get("translate.target_language") or "English").strip().lower()
-    return {"english": "en", "vietnamese": "vi", "french": "fr", "german": "de", "spanish": "es"}.get(
-        language, re.sub(r"[^a-z]", "", language)[:3] or "en")
-
-
 def translate_lines(lines: List[str], title: str = "", artist: str = "") -> Dict[str, str]:
     """``{original line: translation}`` for the distinct CJK lines given."""
     unique: List[str] = []
@@ -109,7 +103,8 @@ def _split_timed(line: str) -> Tuple[str, str]:
 
 def render(text: str, is_lrc: bool, translations: Dict[str, str], inline: bool) -> str:
     """Build the output file body. ``inline`` interleaves each translation
-    after its original line (same timestamp); otherwise only translations."""
+    after its original line (same timestamp); otherwise the translation
+    replaces the line and untranslated lines are kept as they are."""
     out: List[str] = [_LRC_MARKER_LINE] if is_lrc else []
     for raw in text.splitlines():
         stamp, body = _split_timed(raw) if is_lrc else ("", raw)
@@ -133,9 +128,22 @@ def find_sidecar(audio_path: str) -> Optional[str]:
     return None
 
 
+def backup_path(sidecar: str) -> str:
+    """Where the untranslated lyrics are kept in ``separate`` mode:
+    ``song.lrc`` -> ``song.original.lrc``."""
+    base, ext = os.path.splitext(sidecar)
+    return f"{base}.original{ext}"
+
+
 def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Optional[str]:
     """Translate the lyrics next to ``audio_path``. Returns the text to embed
-    in the audio file (inline mode), or None when nothing was written."""
+    in the audio file, or None when nothing was written.
+
+    * ``inline``: each translated line is added under its original line.
+    * ``separate``: the sidecar becomes the translation only (so the media
+      server shows it) and the untranslated file is kept beside it as
+      ``<name>.original.lrc``.
+    """
     if not config.get("lyrics.enabled"):
         return None
     sidecar = find_sidecar(audio_path)
@@ -143,10 +151,6 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
         return None
     is_lrc = sidecar.lower().endswith(".lrc")
     inline = str(config.get("lyrics.mode") or "inline") != "separate"
-    base, ext = os.path.splitext(sidecar)
-    separate_path = f"{base}.{_lang_code()}{ext}"
-    if not inline and os.path.exists(separate_path):
-        return None
     try:
         with open(sidecar, "r", encoding="utf-8") as fh:
             text = fh.read()
@@ -161,18 +165,24 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
     if not translations:
         return None
     rendered = render(text, is_lrc, translations, inline)
-    target = sidecar if inline else separate_path
-    tmp = f"{target}.fork-tmp"
+    tmp = f"{sidecar}.fork-tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(rendered)
-        os.replace(tmp, target)
+        if not inline:
+            backup = backup_path(sidecar)
+            # An existing backup is the true original; never replace it with
+            # whatever is in the sidecar now.
+            if not os.path.exists(backup):
+                os.replace(sidecar, backup)
+        os.replace(tmp, sidecar)
     except OSError as exc:
-        logger.warning("Could not write translated lyrics %s: %s", target, exc)
+        logger.warning("Could not write translated lyrics %s: %s", sidecar, exc)
         try:
             os.remove(tmp)
         except OSError:
             pass
         return None
-    logger.info("Translated lyrics (%s lines) -> %s", len(translations), os.path.basename(target))
-    return rendered if inline else None
+    logger.info("Translated lyrics (%s lines, %s) -> %s", len(translations),
+                "inline" if inline else "original kept as .original", os.path.basename(sidecar))
+    return rendered

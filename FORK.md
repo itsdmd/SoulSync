@@ -12,7 +12,7 @@ All of it is configured from **LLM & Tagging** in the sidebar (under Settings).
 |---|---------|---------|
 | 1.1 | Smarter search terms | When upstream's fixed queries are about to run, extra `artist title` variants are appended after them: the artist's other names from MusicBrainz, and alternative title spellings (romanized, original script, official English) from the model. A file found by a variant may be matched against that variant. |
 | 1.2 | Name translation | CJK song titles and album names are translated and written to tags and paths using a template (default `{translated} ({original})`). Every translation is stored once per name, so an album is always named the same. Edit one in the GUI and the model never overwrites it. |
-| 1.3 | Lyrics translation | CJK `.lrc` / `.txt` lyrics get a translated line under each original line (or a separate `<name>.en.lrc`). |
+| 1.3 | Lyrics translation | CJK `.lrc` / `.txt` lyrics get a translated line under each original line. Alternatively `<name>.lrc` becomes the translation only (what the media server shows, and what is embedded) and the untranslated lyrics are kept as `<name>.original.lrc`. |
 | 1.4 | Model per task | Separate model for search terms, names and lyrics. Default `qwen3.5:9b`. |
 | 2 | Artist tagging rules | `original name → name to use`, applied to tags and folders. CJK artists are resolved automatically from MusicBrainz aliases (no model); manual rules always win and work for any name. |
 | 3 | Discography: hide owned | "Hide owned" in the Download Discography dialog; owned releases are also shown as owned and left unchecked. |
