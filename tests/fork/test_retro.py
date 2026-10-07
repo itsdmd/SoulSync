@@ -177,3 +177,106 @@ def test_details_for_album_title_and_artist(lib):
     assert artist["record"]["replacement"] == "Jay Chou" and artist["library_names"] == ["Jay Chou"]
     assert artist["track_count"] == 2
     assert retro.details(lib["db"], "artist", "Nobody")["albums"] == []
+
+
+# ── folder target ───────────────────────────────────────────────────────
+
+def test_a_folder_target_reaches_files_the_database_does_not_know(lib):
+    # same album sitting in another folder, never scanned into the library
+    spare = lib["root"] / "Unscanned" / "Chopin copy"
+    path = _flac(str(spare / "01 - Night Song (夜曲).flac"), title="Night Song (夜曲)", soulsync_original_title="夜曲")
+    store.save_translation("title", "夜曲", "Nocturne", user_edited=True)
+    data = retro.apply_translation(lib["db"], "title", "夜曲", folder=str(spare))
+    assert data["written"] == 1 and data["renamed"] == 1 and data["folder"] == str(spare)
+    assert FLAC(str(spare / "01 - Nocturne (夜曲).flac"))["title"] == ["Nocturne (夜曲)"]
+    assert not os.path.exists(path)
+    # the library copy outside the chosen folder was left alone
+    assert FLAC(lib["files"]["夜曲"])["title"] == ["Night Song (夜曲)"]
+
+
+def test_a_folder_target_limits_the_change_to_that_folder(lib):
+    store.save_translation("title", "夜曲", "Nocturne", user_edited=True)
+    elsewhere = lib["root"] / "X"
+    assert retro.apply_translation(lib["db"], "title", "夜曲", folder=str(elsewhere))["files"] == []
+    assert FLAC(lib["files"]["夜曲"])["title"] == ["Night Song (夜曲)"]
+
+
+def test_a_folder_outside_the_library_is_refused(lib, tmp_path):
+    store.save_translation("title", "夜曲", "Nocturne", user_edited=True)
+    (tmp_path / "elsewhere").mkdir()
+    with pytest.raises(PermissionError):
+        retro.apply_translation(lib["db"], "title", "夜曲", folder=str(tmp_path / "elsewhere"))
+
+
+# ── apply all ───────────────────────────────────────────────────────────
+
+def _seed_all():
+    store.save_translation("title", "夜曲", "Nocturne", user_edited=True)
+    store.save_translation("title", "髮如雪", "Hair Like Snow", model="m")      # already what the file says
+    store.save_translation("album", "十一月的蕭邦", "November's Chopin", user_edited=True)
+    store.save_translation("title", "不在庫", "Not In Library", model="m")
+
+
+def test_apply_all_dry_run_reports_and_changes_nothing(lib):
+    _seed_all()
+    progress = []
+    result = retro.run_apply_all(lib["db"], dry_run=True, progress=lambda done, total: progress.append((done, total)))
+    assert result["total"] == 4 and result["done"] == 4 and progress[-1] == (4, 4)
+    assert result["names_changed"] == 2 and result["files"] == 3 and result["folders"] == 1
+    assert result["written"] == 0 and result["renamed"] == 0
+    assert {(s["kind"], s["new"]) for s in result["samples"]} == {
+        ("title", "Nocturne (夜曲)"), ("album", "November's Chopin (十一月的蕭邦)")}
+    assert FLAC(lib["files"]["夜曲"])["title"] == ["Night Song (夜曲)"] and lib["album_dir"].is_dir()
+
+
+def test_apply_all_updates_titles_then_albums(lib, monkeypatch):
+    _seed_all()
+    # keep the fake database's paths in step, as the real one is
+    def moved(old, new):
+        conn = lib["db"]._get_connection()
+        conn.execute("UPDATE tracks SET file_path = ? WHERE file_path = ?", (new, old))
+        conn.commit()
+        conn.close()
+    monkeypatch.setattr(retro, "_update_db_path", moved)
+    result = retro.run_apply_all(lib["db"])
+    assert result["errors"] == [] and result["written"] == 3 and result["renamed"] == 2
+    new_dir = lib["root"] / "Jay Chou" / "Jay Chou - November's Chopin (十一月的蕭邦)"
+    assert sorted(os.listdir(new_dir)) == ["01 - Nocturne (夜曲).flac", "02 - Hair Like Snow (髮如雪).flac"]
+    track = FLAC(str(new_dir / "01 - Nocturne (夜曲).flac"))
+    assert track["title"] == ["Nocturne (夜曲)"] and track["album"] == ["November's Chopin (十一月的蕭邦)"]
+    # a second run has nothing left to do
+    again = retro.run_apply_all(lib["db"])
+    assert again["files"] == 0 and again["written"] == 0
+
+
+def test_apply_all_can_be_limited_by_kind_and_folder(lib):
+    _seed_all()
+    assert retro.run_apply_all(lib["db"], kind="album", dry_run=True)["total"] == 1
+    only = retro.run_apply_all(lib["db"], dry_run=True, folder=str(lib["root"] / "X"))
+    assert only["files"] == 0 and only["folder"]
+    inside = retro.run_apply_all(lib["db"], dry_run=True, folder=str(lib["album_dir"]))
+    assert inside["files"] == 3
+
+
+def test_background_job_runs_to_completion_and_refuses_a_second_run(lib):
+    import time
+
+    _seed_all()
+    job = retro.start_apply_all(lambda: lib["db"], dry_run=True)
+    assert job["running"] is True
+    for _ in range(200):
+        status = retro.job_status()
+        if not status["running"]:
+            break
+        time.sleep(0.02)
+    assert status["running"] is False and status["error"] is None
+    assert status["result"]["files"] == 3 and status["done"] == 4
+    with pytest.raises(PermissionError):
+        retro.start_apply_all(lambda: lib["db"], folder="/")
+
+
+def test_tool_is_named_for_what_it_now_does():
+    from core.repair_jobs.comma_artist_splitter import CommaArtistSplitterJob
+
+    assert CommaArtistSplitterJob.display_name == "Multiple Artist Formatter"
+    assert CommaArtistSplitterJob.job_id == "comma_artist_splitter"   # saved settings and findings carry over

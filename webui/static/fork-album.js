@@ -40,11 +40,13 @@
     }
 
     async function api(path, body) {
+        // a signal opts the request out of the app's 2.5s GET sharing
+        // (fetch-dedupe.js), so a folder listing is never a stale one
         const resp = await fetch(API + path, body ? {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-        } : undefined);
+        } : { signal: new AbortController().signal });
         let data = {};
         try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
         if (!resp.ok || data.success === false) throw new Error(data.error || `Request failed (${resp.status})`);
@@ -477,6 +479,9 @@
         window.openDownloadMissingModalForArtistAlbum = wrapped;
         return true;
     }
+
+    // the folder picker is reused by the LLM & Tagging panel (fork-ui.js)
+    window.forkOpenFolderBrowser = openBrowser;
 
     if (!install()) document.addEventListener('DOMContentLoaded', install);
 })();

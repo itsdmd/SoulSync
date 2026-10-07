@@ -1,7 +1,7 @@
 /**
  * fork (itsdmd/SoulSync): settings that only apply in some combinations.
  *
- * The Comma Artist Splitter either writes each artist as its own tag or joins
+ * The Multiple Artist Formatter (job id comma_artist_splitter) either writes each artist as its own tag or joins
  * them with a chosen separator — never both — so the separator settings are
  * locked while tag splitting is on, and the custom separator is only open when
  * Separator is set to Custom.

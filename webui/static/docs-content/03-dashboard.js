@@ -216,7 +216,7 @@ The background repair worker runs automated jobs on configurable schedules, incl
 | Cache Maintenance | Cleans expired metadata cache entries |
 | Corrupt File Detector | Decode-tests every library FLAC (\`flac -t\`, falling back to ffmpeg) and flags physically damaged files — the only cure is a fresh download |
 | Resolve Canonical Album Versions | Pins each album's canonical release across metadata sources so the reorganizer and track-number repair resolve the same release (opt-in; costs API calls, done once per album) |
-| Comma Artist Splitter | Finds dummy artists that are really several artists joined by separators ("Camellia, Toby Fox") and splits their tags — verifies against metadata APIs first so real separator-named acts like "Tyler, The Creator" are never split |
+| Multiple Artist Formatter | Finds dummy artists that are really several artists joined by separators ("Camellia, Toby Fox") and splits their tags — verifies against metadata APIs first so real separator-named acts like "Tyler, The Creator" are never split |
 | Discography Backfill | Finds missing albums and tracks for artists already in your library |
 | Empty Folder Cleaner | Finds truly-empty folders (or folders holding only OS junk like .DS_Store) in the library root — never touches a folder containing audio or cover art |
 | Expired Download Cleaner | Proposes deleting watchlist/playlist-sourced downloads past their per-origin retention window; always keeps actively-mirrored playlists, watched artists, and tracks you've played more than once (optional auto-delete) |

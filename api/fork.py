@@ -147,12 +147,43 @@ def apply_translation_to_library():
     try:
         data = retro.apply_translation(
             get_database(), str(body.get("kind") or ""), str(body.get("original") or "").strip(),
-            rename=body.get("rename", True) is not False, dry_run=body.get("dry_run") is True)
+            rename=body.get("rename", True) is not False, dry_run=body.get("dry_run") is True,
+            folder=str(body.get("folder") or "").strip() or None)
+    except (PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
     except ValueError as exc:
         return jsonify(success=False, error=str(exc)), 400
     except LookupError as exc:
         return jsonify(success=False, error=str(exc)), 404
     return jsonify(success=True, **data)
+
+
+@bp.route("/api/fork/translations/apply-all", methods=["POST"])
+@admin_only
+def apply_all_translations():
+    """Start applying every stored translation in the background."""
+    from core.fork import retro
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        job = retro.start_apply_all(
+            get_database, kind=str(body.get("kind") or "") or None,
+            rename=body.get("rename", True) is not False, dry_run=body.get("dry_run") is True,
+            folder=str(body.get("folder") or "").strip() or None)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    except RuntimeError as exc:
+        return jsonify(success=False, error=str(exc)), 409
+    return jsonify(success=True, job=job)
+
+
+@bp.route("/api/fork/translations/apply-all", methods=["GET"])
+@admin_only
+def apply_all_status():
+    from core.fork import retro
+
+    return jsonify(success=True, job=retro.job_status())
 
 
 @bp.route("/api/fork/details", methods=["GET"])

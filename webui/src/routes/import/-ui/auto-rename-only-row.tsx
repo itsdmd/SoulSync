@@ -15,7 +15,8 @@ export function AutoRenameOnlyRow({ open }: { open: boolean }) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void fetch('/api/fork/settings')
+    // a signal opts out of the app's 2.5s GET sharing, so this is never a stale read
+    void fetch('/api/fork/settings', { signal: new AbortController().signal })
       .then((response) => response.json())
       .then((data) => {
         if (!cancelled) setValue(Boolean(data?.settings?.import?.rename_only_auto));

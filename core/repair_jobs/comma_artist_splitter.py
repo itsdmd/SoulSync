@@ -644,6 +644,14 @@ class CommaArtistSplitterJob(RepairJob):
 # mutually exclusive — the separator only applies when tag splitting is off —
 # and the same strategy is applied to the album artist. See
 # core/fork/artist_format.py and FORK.md.
+# The job no longer only splits on commas: it detects many separators and
+# writes the result as separate tags or with a chosen separator. The id stays
+# 'comma_artist_splitter' so saved settings, schedules and findings carry over.
+CommaArtistSplitterJob.display_name = 'Multiple Artist Formatter'
+CommaArtistSplitterJob.description = (
+    'Finds artists that are really several artists joined by a separator and re-tags them '
+    'as separate artists, in the format you choose'
+)
 CommaArtistSplitterJob.default_settings = {
     **CommaArtistSplitterJob.default_settings,
     'split_into_separate_tags': True,

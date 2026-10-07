@@ -47,10 +47,14 @@
     }
 
     async function api(path, method, body) {
+        // The app shares identical GETs made within 2.5s (fetch-dedupe.js). These
+        // lists are re-read right after an edit, and a shared response would be
+        // the list from BEFORE the edit — a request carrying a signal opts out.
         const resp = await fetch(API + path, {
             method: method || 'GET',
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body: body ? JSON.stringify(body) : undefined,
+            signal: new AbortController().signal,
         });
         let data = {};
         try { data = await resp.json(); } catch (_) { /* non-JSON error page */ }
@@ -123,6 +127,8 @@
 .fork-pop-num{width:44px;color:#8a8a8a;font-variant-numeric:tabular-nums;white-space:nowrap}
 .fork-pop-file{max-width:260px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fork-old{color:#8a8a8a;text-decoration:line-through;font-size:12px}
+.fork-where{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#999}
+.fork-where.fork-where-set{color:#e8e8e8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;direction:rtl;text-align:left}
 ` }));
     }
 
@@ -389,6 +395,11 @@
                 ]),
                 el('input', { class: 'fork-input', placeholder: 'Search…', oninput: (e) => { state.search = e.target.value; load(); } }),
                 count,
+                el('button', {
+                    class: 'fork-btn', type: 'button', text: 'Apply all to library…',
+                    title: 'Update every file that still carries an older translation of a saved album or title',
+                    onclick: () => openApplyAll(state.kind, load),
+                }),
             ]),
             el('div', { class: 'fork-bar' }, [
                 addKind, addOriginal, addTranslated,
@@ -580,18 +591,52 @@
         );
     }
 
+    const base = (p) => String(p || '').split('/').pop();
+
+    /** "Where" row shared by the two apply dialogs: whole library, or one folder. */
+    function folderRow(opts, onChange) {
+        const label = el('span', { class: 'fork-where' });
+        const reset = el('button', {
+            class: 'fork-btn', type: 'button', text: 'Whole library',
+            onclick: () => { opts.folder = ''; sync(); onChange(); },
+        });
+        const sync = () => {
+            label.textContent = opts.folder || 'Whole library (everything SoulSync has scanned)';
+            label.title = opts.folder || '';
+            label.classList.toggle('fork-where-set', !!opts.folder);
+            reset.style.display = opts.folder ? '' : 'none';
+        };
+        sync();
+        return el('div', { class: 'fork-row' }, [
+            el('label', { text: 'Apply to', style: 'flex:0 0 70px' }),
+            label,
+            el('button', {
+                class: 'fork-btn', type: 'button', text: 'Choose folder…',
+                title: 'Only change files inside one folder. Also reaches files SoulSync has not scanned.',
+                onclick: () => {
+                    if (typeof window.forkOpenFolderBrowser !== 'function') { toast('Folder picker is not available', 'error'); return; }
+                    window.forkOpenFolderBrowser(opts.folder, (picked) => { opts.folder = picked; sync(); onChange(); });
+                },
+            }),
+            reset,
+        ]);
+    }
+
+    const renameCheck = (opts, onChange) => el('label', { class: 'fork-check' }, [
+        el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.rename = e.target.checked; onChange(); } }),
+        el('span', {}, ['Also rename the files / album folder', el('small', {
+            text: 'Off: only the tag changes and files keep their current names.',
+        })]),
+    ]);
+
     function openApply(kind, original, onDone) {
-        const opts = { rename: true };
+        const opts = { rename: true, folder: '' };
         const body = el('div', { class: 'fork-pop-body' });
         const status = el('span', { class: 'fork-help', style: 'flex:1' });
         const go = el('button', { class: 'fork-btn primary', text: 'Apply', disabled: true });
         const layer = popup(`Apply translation: ${original}`, [
-            el('label', { class: 'fork-check' }, [
-                el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.rename = e.target.checked; preview(); } }),
-                el('span', {}, ['Also rename the files / album folder', el('small', {
-                    text: 'Off: only the tag changes and files keep their current names.',
-                })]),
-            ]),
+            folderRow(opts, () => preview()),
+            renameCheck(opts, () => preview()),
             body,
             el('div', { class: 'fork-foot', style: 'padding:12px 0 0;border:0' }, [
                 status,
@@ -600,19 +645,19 @@
             ]),
         ], true);
 
-        const base = (p) => String(p || '').split('/').pop();
         async function preview() {
             go.disabled = true;
             status.textContent = '';
-            body.replaceChildren(el('div', { class: 'fork-empty', text: 'Checking your library…' }));
+            body.replaceChildren(el('div', { class: 'fork-empty', text: opts.folder ? 'Checking the folder…' : 'Checking your library…' }));
             let data;
             try {
-                data = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, dry_run: true });
+                data = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, folder: opts.folder, dry_run: true });
             } catch (err) { body.replaceChildren(el('div', { class: 'fork-empty', text: err.message })); return; }
             if (!data.files.length) {
                 body.replaceChildren(el('div', { class: 'fork-empty', text:
                     `No files need changing: ${data.checked} checked, all already read “${data.display}” or are not this ${kind}.`
-                    + (data.unreachable ? ` ${data.unreachable} could not be found on disk.` : '') }));
+                    + (data.unreachable ? ` ${data.unreachable} could not be found on disk.` : '')
+                    + (opts.folder ? '' : ' If the files are not in SoulSync’s library yet, choose their folder above.') }));
                 return;
             }
             const rows = data.files.map((f) => el('tr', {}, [
@@ -637,7 +682,7 @@
             go.disabled = true;
             status.textContent = 'Applying…';
             try {
-                const done = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename });
+                const done = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, folder: opts.folder });
                 if (done.errors.length) {
                     toast(`Updated ${done.written} file(s); ${done.errors.length} problem(s)`, 'error');
                     status.textContent = done.errors.slice(0, 3).join(' · ');
@@ -649,6 +694,101 @@
             } catch (err) { status.textContent = err.message; go.disabled = false; }
         });
         preview();
+    }
+
+    /** Apply every stored translation. Runs in the background on the server;
+     *  this dialog previews first, then applies, polling for progress. */
+    function openApplyAll(kind, onDone) {
+        const opts = { rename: true, folder: '' };
+        const scope = kind === 'album' ? 'album' : kind === 'title' ? 'title' : '';
+        const body = el('div', { class: 'fork-pop-body' });
+        const status = el('span', { class: 'fork-help', style: 'flex:1' });
+        const previewBtn = el('button', { class: 'fork-btn', text: 'Preview' });
+        const go = el('button', { class: 'fork-btn primary', text: 'Apply all', disabled: true });
+        let closed = false;
+        let previewed = false;
+        const layer = popup(`Apply all ${scope ? scope + ' ' : ''}translations to the library`, [
+            folderRow(opts, () => invalidate()),
+            renameCheck(opts, () => invalidate()),
+            body,
+            el('div', { class: 'fork-foot', style: 'padding:12px 0 0;border:0' }, [
+                status,
+                el('button', { class: 'fork-btn', text: 'Close', onclick: () => { closed = true; layer.remove(); } }),
+                previewBtn, go,
+            ]),
+        ], true);
+        const intro = () => body.replaceChildren(el('div', { class: 'fork-empty', text:
+            'Every saved translation is compared with the files that carry that album or title, and files that still show an older translation are updated. '
+            + 'Run Preview to see what would change. On a large library this can take a few minutes.' }));
+        function invalidate() { previewed = false; go.disabled = true; status.textContent = ''; intro(); }
+        intro();
+
+        async function run(dryRun) {
+            previewBtn.disabled = true; go.disabled = true;
+            status.textContent = dryRun ? 'Checking…' : 'Applying…';
+            let job;
+            try {
+                const started = (await api('/translations/apply-all', 'POST', { kind: scope, rename: opts.rename, folder: opts.folder, dry_run: dryRun })).job;
+                // Poll until THIS run finishes. The URL is unique per poll and the
+                // job id is checked: the app de-duplicates identical GETs, which
+                // otherwise hands back the previous run's (preview) result.
+                for (;;) {
+                    await new Promise((resolve) => setTimeout(resolve, 700));
+                    if (closed) return null;
+                    job = (await api(`/translations/apply-all?run=${started.id}&t=${Date.now()}`)).job;
+                    if (job.id !== started.id) continue;
+                    if (!job.running) break;
+                    status.textContent = `${dryRun ? 'Checking' : 'Applying'}… ${job.done} / ${job.total || '?'} names`;
+                }
+            } catch (err) { status.textContent = err.message; previewBtn.disabled = false; return null; }
+            previewBtn.disabled = false;
+            if (job.error) { status.textContent = job.error; return null; }
+            return job.result;
+        }
+
+        function show(result, dryRun) {
+            const verb = dryRun ? 'would be updated' : 'updated';
+            const rows = result.samples.map((s) => el('tr', {}, [
+                el('td', {}, el('span', { class: 'fork-tag', text: s.kind })),
+                el('td', { class: 'fork-pop-file', text: s.file, title: s.file }),
+                el('td', {}, [el('div', { class: 'fork-old', text: s.old }), el('div', { text: s.new })]),
+            ]));
+            const more = result.files - result.samples.length;
+            body.replaceChildren(
+                el('div', { class: 'fork-facts' }, [
+                    ['Names checked', result.total], ['Names with changes', result.names_changed],
+                    [`Files ${verb}`, dryRun ? result.files : result.written],
+                    [dryRun ? 'Folders to rename' : 'Renamed', dryRun ? result.folders : result.renamed],
+                ].map(([label, value]) => el('div', { class: 'fork-fact' }, [el('span', { text: label }), el('strong', { text: String(value) })]))),
+                rows.length ? el('table', { class: 'fork-table' }, [
+                    el('thead', {}, el('tr', {}, ['', 'File', 'Tag'].map((t) => el('th', { text: t })))),
+                    el('tbody', {}, rows),
+                ]) : el('div', { class: 'fork-empty', text: 'Everything already matches the saved translations.' }),
+                more > 0 ? el('div', { class: 'fork-help', text: `…and ${more} more file${more === 1 ? '' : 's'}.` }) : null,
+                result.errors.length ? el('div', { class: 'fork-help', style: 'color:#ff8f8f', text: result.errors.slice(0, 5).join(' · ') }) : null,
+            );
+        }
+
+        previewBtn.addEventListener('click', async () => {
+            const result = await run(true);
+            if (!result) return;
+            show(result, true);
+            previewed = true;
+            status.textContent = result.files ? `${result.files} file${result.files === 1 ? '' : 's'} would be updated` : 'Nothing to change';
+            go.disabled = !result.files;
+        });
+        go.addEventListener('click', async () => {
+            if (!previewed) return;
+            const result = await run(false);
+            if (!result) return;
+            show(result, false);
+            previewed = false;
+            status.textContent = result.errors.length
+                ? `Done with ${result.errors.length} problem${result.errors.length === 1 ? '' : 's'}`
+                : 'Done. Rescan your media server to see the changes.';
+            toast(`Updated ${result.written} file${result.written === 1 ? '' : 's'}${result.renamed ? `, ${result.renamed} renamed` : ''}`, result.errors.length ? 'error' : 'success');
+            if (onDone) onDone();
+        });
     }
 
     // ── modal shell ───────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ tag equals the original, or the tag embeds it ("Night Song (夜曲)").
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.fork import store, tags, translate
@@ -171,13 +172,54 @@ def _rename_title_file(plan: Dict[str, Any]) -> Optional[str]:
     return target
 
 
-def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
-                      dry_run: bool = False) -> Dict[str, Any]:
-    """Rewrite the title/album tag of every library file that is ``original``
-    to the currently stored translation."""
-    from mutagen import File as MutagenFile
+def _candidate_paths(db: Any, kind: str, original: str, folder: Optional[str]) -> Tuple[List[str], int]:
+    """Files worth checking, and how many library rows had no file on disk.
 
+    With ``folder`` the audio files under that folder are checked directly —
+    for files SoulSync's database does not know, or to limit the change to one
+    place. Otherwise the library database supplies the candidates.
+    """
     from core.fork import album_tagging
+
+    if folder:
+        return _folder_files(folder), 0
+    paths: List[str] = []
+    unreachable = 0
+    for track in library_tracks(db, kind, original):
+        path = _resolve(track.get("file_path"))
+        if not path or not os.path.isfile(path):
+            unreachable += 1
+        elif path not in paths and album_tagging.root_of(path) is not None:
+            paths.append(path)
+    return paths, unreachable
+
+
+def _folder_files(folder: str, limit: int = 20000) -> List[str]:
+    """Audio files under ``folder`` (any depth), which must be inside a
+    library folder."""
+    from core.fork import album_tagging
+
+    real = album_tagging.safe_dir(folder)
+    exts = album_tagging._audio_exts()
+    out: List[str] = []
+    for current, dirs, names in os.walk(real):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(names, key=str.casefold):
+            if os.path.splitext(name)[1].lower() in exts and not name.startswith("."):
+                out.append(os.path.join(current, name))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
+                      dry_run: bool = False, folder: Optional[str] = None,
+                      paths: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Rewrite the title/album tag of every file that is ``original`` to the
+    currently stored translation. ``folder`` limits the search to one folder
+    (and reaches files the library database does not list); ``paths`` is a
+    pre-scanned file list for callers applying many names to one folder."""
+    from mutagen import File as MutagenFile
 
     if kind not in _FIELD or not original:
         raise ValueError("kind and original are required")
@@ -186,16 +228,14 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
         raise LookupError("No stored translation for this name")
 
     plans: List[Dict[str, Any]] = []
-    seen: set = set()
-    unreachable = 0
-    for track in library_tracks(db, kind, original):
-        path = _resolve(track.get("file_path"))
-        if not path or not os.path.isfile(path):
-            unreachable += 1
+    if paths is None:
+        paths, unreachable = _candidate_paths(db, kind, original, folder)
+    else:
+        unreachable = 0
+    seen = set(paths)
+    for path in paths:
+        if not os.path.isfile(path):
             continue
-        if path in seen or album_tagging.root_of(path) is None:
-            continue
-        seen.add(path)
         try:
             plan = plan_file(path, kind, original)
         except Exception as exc:
@@ -221,7 +261,7 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
         "kind": kind, "original": original, "display": translate.format_name(row["translated"], original),
         "files": [{"path": p["path"], "old": p["old"], "new": p["new"], "rename_to": p.get("rename_to")} for p in plans],
         "folders": [{"from": a, "to": b} for a, b in folders.items()],
-        "checked": len(seen), "unreachable": unreachable, "dry_run": dry_run,
+        "checked": len(seen), "unreachable": unreachable, "dry_run": dry_run, "folder": folder or "",
         "written": 0, "renamed": 0, "errors": [],
     }
     if dry_run:
@@ -262,6 +302,100 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
     logger.info("Applied %s translation for %r: %s tag(s), %s rename(s), %s error(s)",
                 kind, original, result["written"], result["renamed"], len(result["errors"]))
     return result
+
+
+# ── apply every stored translation ──────────────────────────────────────
+
+_job_lock = threading.Lock()
+_job: Dict[str, Any] = {"id": 0, "running": False}
+_SAMPLE_LIMIT = 200
+
+
+def job_status() -> Dict[str, Any]:
+    with _job_lock:
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in _job.items()}
+
+
+def _records(kind: Optional[str]) -> List[Dict[str, Any]]:
+    """Titles before albums: an album folder rename moves every file in it,
+    so the per-file title work is done while paths are still as recorded."""
+    out: List[Dict[str, Any]] = []
+    for k in ("title", "album"):
+        if kind in (None, "", k):
+            out += store.list_translations(kind=k, limit=1_000_000)["items"]
+    return out
+
+
+def run_apply_all(db: Any, kind: Optional[str] = None, rename: bool = True, dry_run: bool = False,
+                  folder: Optional[str] = None, progress: Optional[Any] = None) -> Dict[str, Any]:
+    """Apply every stored translation. Returns totals and a sample of the
+    changes; ``progress(done, total)`` is called after each name."""
+    records = _records(kind)
+    totals: Dict[str, Any] = {"total": len(records), "done": 0, "names_changed": 0, "files": 0,
+                              "folders": 0, "written": 0, "renamed": 0, "errors": [], "samples": [],
+                              "dry_run": dry_run, "folder": folder or ""}
+    paths = _folder_files(folder) if folder else None
+    for record in records:
+        try:
+            # a folder rename earlier in this run invalidates the pre-scanned list
+            if paths is not None and totals["renamed"] and not dry_run:
+                paths = _folder_files(folder) if folder and os.path.isdir(folder) else []
+            data = apply_translation(db, record["kind"], record["original"], rename=rename,
+                                     dry_run=dry_run, folder=folder, paths=paths)
+        except Exception as exc:
+            totals["errors"].append(f"{record['original']}: {exc}")
+            data = None
+        if data and (data["files"] or data["folders"]):
+            totals["names_changed"] += 1
+            totals["files"] += len(data["files"])
+            totals["folders"] += len(data["folders"])
+            totals["written"] += data["written"]
+            totals["renamed"] += data["renamed"]
+            totals["errors"] += data["errors"]
+            for item in data["files"]:
+                if len(totals["samples"]) < _SAMPLE_LIMIT:
+                    totals["samples"].append({"kind": record["kind"], "file": os.path.basename(item["path"]),
+                                              "old": item["old"], "new": item["new"]})
+        totals["done"] += 1
+        if progress:
+            progress(totals["done"], totals["total"])
+    return totals
+
+
+def start_apply_all(db_factory: Any, kind: Optional[str] = None, rename: bool = True,
+                    dry_run: bool = False, folder: Optional[str] = None) -> Dict[str, Any]:
+    """Run :func:`run_apply_all` in the background (a large library takes a
+    while); poll :func:`job_status`. One run at a time."""
+    from core.fork import album_tagging
+
+    if folder:
+        folder = album_tagging.safe_dir(folder)   # fail now, not in the thread
+    with _job_lock:
+        if _job.get("running"):
+            raise RuntimeError("An apply-all run is already in progress")
+        job_id = int(_job.get("id") or 0) + 1
+        _job.clear()
+        _job.update({"id": job_id, "running": True, "done": 0, "total": 0, "dry_run": dry_run,
+                     "folder": folder or "", "result": None, "error": None})
+
+    def progress(done: int, total: int) -> None:
+        with _job_lock:
+            if _job.get("id") == job_id:
+                _job.update({"done": done, "total": total})
+
+    def work() -> None:
+        result, error = None, None
+        try:
+            result = run_apply_all(db_factory(), kind, rename, dry_run, folder, progress)
+        except Exception as exc:  # noqa: BLE001 - reported to the caller through the status
+            logger.exception("apply-all failed")
+            error = str(exc)
+        with _job_lock:
+            if _job.get("id") == job_id:
+                _job.update({"running": False, "result": result, "error": error})
+
+    threading.Thread(target=work, name="fork-apply-all", daemon=True).start()
+    return job_status()
 
 
 # ── details pop-up ──────────────────────────────────────────────────────
