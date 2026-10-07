@@ -5,6 +5,7 @@ import type { RepairFinding } from '../-tools.types';
 
 import { fetchRepairFindings, fixFinding, dismissFinding, reopenFinding } from '../-tools.api';
 import { findingFixLabel, findingSeverityIcon, findingTypeLabel } from '../-tools.core';
+import { FORK_FINDINGS_CHANGED, forkFindingEditor, forkFixLabel } from '../-tools.fork';
 import { VinylCoverFallback } from './album-cover-fallback';
 
 export interface AlbumInspectionTrayProps {
@@ -73,6 +74,14 @@ export function AlbumInspectionTray({
 
   useEffect(() => {
     void loadAlbumFindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.key, status]);
+
+  // fork: a finding edited in the fork's own dialog
+  useEffect(() => {
+    const reload = () => void loadAlbumFindings();
+    window.addEventListener(FORK_FINDINGS_CHANGED, reload);
+    return () => window.removeEventListener(FORK_FINDINGS_CHANGED, reload);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.key, status]);
 
@@ -345,7 +354,7 @@ export function AlbumInspectionTray({
           <div className="album-tray-tracks-list">
             {findings.map((f, idx) => {
               const details = (f.details as Record<string, any>) || {};
-              const fixLabel = findingFixLabel(f.finding_type);
+              const fixLabel = findingFixLabel(f.finding_type) ?? forkFixLabel(f.finding_type); // fork
               const busy = busyIds.has(f.id);
               const isRedl = isRedownloadFinding(f.finding_type);
 
@@ -461,6 +470,18 @@ export function AlbumInspectionTray({
                               onClick={() => void handleFixOne(f)}
                             >
                               {busy ? '...' : fixLabel}
+                            </button>
+                          ) : null}
+
+                          {forkFindingEditor(f) ? (
+                            <button
+                              type="button"
+                              className="btn btn--xs btn--secondary album-action-btn"
+                              disabled={busy}
+                              onClick={forkFindingEditor(f)}
+                              title="Add or remove items and change disc numbers before grouping"
+                            >
+                              Edit…
                             </button>
                           ) : null}
 

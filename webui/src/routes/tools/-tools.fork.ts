@@ -26,6 +26,16 @@ const LOCKS: Record<string, Record<string, (values: Values) => string | undefine
   },
 };
 
+/** fork: fix-button labels for the fork's own finding types. */
+const FORK_FIX_LABELS: Record<string, string> = {
+  fork_untranslated: 'Apply',
+  fork_album_volumes: 'Group',
+};
+
+export function forkFixLabel(findingType: string): string | null {
+  return FORK_FIX_LABELS[findingType] ?? null;
+}
+
 /**
  * fork: findings whose content can be edited before fixing. The editor itself
  * is plain JS (webui/static/fork-album.js); this only finds it. It announces a

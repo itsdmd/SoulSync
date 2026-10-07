@@ -510,7 +510,7 @@
                     FIELDS.map(([key, label]) => el('th', {}, el('label', { class: 'fork-album-fieldhead' }, [fieldToggle(key, label), label])))))),
                 el('tbody', {}, rows.map(renderRow)),
             ]));
-            refreshStatus();
+            applyFieldStates();
         }
 
         async function load() {
@@ -775,7 +775,7 @@
                 return;
             }
             root.remove();
-            toast('Set saved. Use the finding\'s fix button to group it.');
+            toast('Set saved. Press Group on the finding to apply it.');
             window.dispatchEvent(new Event('fork:findings-changed'));
         });
         albumInput.addEventListener('input', refresh);

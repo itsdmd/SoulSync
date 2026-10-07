@@ -76,7 +76,7 @@ import {
   REPAIR_DEFAULT_PAGE_SIZE,
   REPAIR_PAGE_SIZE_OPTIONS,
 } from '../-tools.core';
-import { FORK_FINDINGS_CHANGED, forkFindingEditor } from '../-tools.fork';
+import { FORK_FINDINGS_CHANGED, forkFindingEditor, forkFixLabel } from '../-tools.fork';
 import { safeFixablePending, visibleGroups } from '../-tools.groups';
 import { RedownloadModal } from '../../artist-detail/-ui/redownload-modal';
 import { ReidentifyModal } from '../../artist-detail/-ui/reidentify-modal';
@@ -1592,7 +1592,7 @@ function FindingCard({
 }) {
   const details = finding.details || {};
   const filePath = findingFilePath(finding);
-  const fixLabel = findingFixLabel(finding.finding_type);
+  const fixLabel = findingFixLabel(finding.finding_type) ?? forkFixLabel(finding.finding_type);
   const forkEdit = forkFindingEditor(finding); // fork
   const statusBadge = findingStatusBadge(finding.status, finding.user_action);
 

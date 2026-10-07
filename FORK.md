@@ -192,6 +192,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `gunicorn.conf.py` | one appended setting: `keepalive = 120` |
 | `web_server.py` | registers the `api/fork.py` blueprint; 2 lines at each of the two track-delete paths (remove the lyrics backup) |
 | `webui/src/routes/tools/-ui/findings-surface.tsx` | import + `Edit…` button on a finding card (`forkFindingEditor`) and a reload on `fork:findings-changed` |
+| `webui/src/routes/tools/-ui/album-inspection-tray.tsx` | same `Edit…` button and reload in the album action center; both components fall back to `forkFixLabel` so the fork's finding types get a fix button (`Apply`, `Group`) |
 | `webui/index.html` | `<script>` tags for `fork-ui.js` and `fork-album.js`, one `<link>` for `fork.css` |
 | `webui/src/routes/active-downloads/-ui/active-downloads-page.tsx` | search state, filtering, mounts the search box |
 | `webui/src/routes/active-downloads/-ui/adl-groups.tsx` | optional `searching` prop (unfold matches) |
