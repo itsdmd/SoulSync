@@ -113,3 +113,44 @@ def test_the_import_hook_harmonizes_against_the_destination_folder(tmp_path):
     hooks.mark_rename_only(context, True)
     hooks.after_metadata_enhanced(untouched, context)
     assert _ids(untouched)[0] == ""
+
+
+def test_consistency_tool_reaches_tracks_stored_under_a_virtual_server_path(tmp_path, monkeypatch):
+    """Navidrome without "Report Real Path" reports made-up file names; the
+    tool skipped those tracks and so never saw the album as inconsistent."""
+    import core.library.path_resolver as resolver
+    from core.repair_jobs.album_tag_consistency import AlbumTagConsistencyJob, find_inconsistencies
+
+    transfer = tmp_path / "Transfer"
+    real = _flac(str(transfer / "Artist" / "Album" / "1.01. Song.flac"))            # no id
+    own = _flac(str(transfer / "Artist" / "Album" / "1.02. Other.flac"), mbid=MBID)  # has it
+    virtual = "Artist/Album/01-01 - Song.flac"                                      # what the server reports
+
+    def shared_resolver(path, **kwargs):
+        return real if path == virtual else None
+
+    monkeypatch.setattr(resolver, "resolve_library_file_path", shared_resolver)
+
+    class Ctx:
+        transfer_folder = str(transfer)
+
+        class config_manager:  # noqa: N801
+            @staticmethod
+            def get(key, default=None):
+                return default
+
+    job = AlbumTagConsistencyJob()
+    assert job._resolve_path(own, Ctx) == own                       # upstream's own lookup still first
+    assert job._resolve_path(virtual, Ctx) == real                  # the fallback
+    assert job._resolve_path("Artist/Album/missing.flac", Ctx) is None
+    tracks = [{"id": 1, "title": "Song", "file_path": virtual, "album_id": "server-row"},
+              {"id": 2, "title": "Other", "file_path": own, "album_id": "soulsync-row"}]
+
+    class Row(dict):
+        def keys(self):
+            return super().keys()
+
+    data = job._read_track_tags([Row(t) for t in tracks], Ctx)
+    assert len(data) == 2                                           # both tracks are read now
+    found = find_inconsistencies(data, job.default_settings)
+    assert [(i["field"], i["canonical"], i["outlier_count"]) for i in found] == [("musicbrainz_albumid", MBID, 1)]

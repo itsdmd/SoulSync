@@ -70,6 +70,13 @@ a minute at a time and everything else behaves like upstream.
   `requirements.txt`); a file keeps its own script in the written name.
 - **Decoration glued to a name** (`相变临界OST`, no bracket or space) is split
   off like a bracketed one when the Latin tail is nothing but listed terms.
+- **Navidrome virtual paths.** Unless "Report Real Path" is enabled for the
+  SoulSync player in Navidrome, it reports made-up file names
+  (`Artist/Album/01-01 - Title.flac`). The shared path resolver copes by
+  probing; upstream's Album Tag Consistency job did its own lookup, skipped
+  those tracks, and so both missed split albums and fixed only part of an
+  album. The fork makes it fall back to the shared resolver. Enabling Report
+  Real Path and refreshing the library is still the proper fix.
 - **Rename only** still names the path from the matched release (with artist
   rules and translations applied), so the file lands next to the rest of the
   album. Integrity checking still runs; quality, AcoustID and silence checks
@@ -160,6 +167,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/repair_worker.py` | EOF wrapper around `_fix_comma_artist_split` (store the split per the job's strategy) |
 | `core/repair_jobs/comma_artist_splitter.py` | EOF block: two extra settings, their options and help text |
 | `core/repair_jobs/__init__.py` | one line: registers `core.repair_jobs.fork_tools` |
+| `core/repair_jobs/album_tag_consistency.py` | EOF wrapper: `_resolve_path` falls back to the shared path resolver |
 | `core/video/youtube_download.py` | EOF wrapper around `process_youtube_download` (audio copy to the import folder) |
 | `core/repair_worker.py` | EOF block: finding labels, job family, fix handlers for the fork's tools |
 | `webui/src/routes/tools/-tools.groups.ts` | two finding blurbs |

@@ -602,3 +602,36 @@ class AlbumTagConsistencyJob(RepairJob):
             if os.path.exists(joined):
                 return joined
         return None
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# This job resolved database paths on its own (as-is, under the transfer or
+# download folder). Navidrome, unless "Report Real Path" is on, reports a
+# made-up path — "Artist/Album/01-01 - Title.flac" for a file really named
+# "1.01. Title.flac" — so every track indexed that way was silently skipped:
+# an album split between such tracks and SoulSync-imported ones looked
+# consistent, and a fix only ever reached part of the album. Fall back to the
+# shared resolver the rest of the app (and this job's own fix) already uses.
+# See FORK.md.
+_upstream_resolve_path = AlbumTagConsistencyJob._resolve_path
+
+
+def _fork_resolve_path(self, file_path, context):
+    resolved = _upstream_resolve_path(self, file_path, context)
+    if resolved:
+        return resolved
+    try:
+        from core.library.path_resolver import resolve_library_file_path
+        config_manager = getattr(context, 'config_manager', None)
+        return resolve_library_file_path(
+            file_path,
+            transfer_folder=getattr(context, 'transfer_folder', None),
+            download_folder=(config_manager.get('soulseek.download_path', '') if config_manager else None),
+            config_manager=config_manager,
+        )
+    except Exception as exc:
+        logger.debug("shared resolver failed for %s: %s", file_path, exc)
+        return None
+
+
+AlbumTagConsistencyJob._resolve_path = _fork_resolve_path
