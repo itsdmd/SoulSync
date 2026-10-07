@@ -811,6 +811,15 @@ def _run_full_missing_tracks_process(batch_id, playlist_id, tracks_json, deps: M
                         matched_track = db_track
                         break
 
+            # fork: a library row carrying this track's external id is this track,
+            # whatever the two sides are called (same rule upstream applies in
+            # the watchlist scanner: a different edition stays wanted).
+            if not found and not force_download_all and not (allow_duplicates and batch_is_album):
+                from core.fork import hooks as _fork_hooks
+                _fork_owned = _fork_hooks.owned_by_external_id(db, track_data, active_server)
+                if _fork_owned is not None:
+                    found, confidence, matched_track = True, 1.0, _fork_owned
+
             analysis_results.append({
                 'track_index': track_index, 'track': track_data, 'found': found, 'confidence': confidence,
                 # Additive: real on-disk location of the owned track (None when not

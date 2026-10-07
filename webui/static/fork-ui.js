@@ -18,6 +18,8 @@
         ['translate.apply_to_paths', 'Apply to folders and file names', ''],
         ['translate.write_original_tags', 'Keep originals in SOULSYNC_ORIGINAL_* tags', ''],
         ['lyrics.enabled', 'Translate CJK lyrics', ''],
+        ['import.rename_only_auto', 'Automatic import: rename only',
+            'The import watcher moves and renames files without changing their tags, artwork or audio. Also on the Import page settings.'],
         ['artist_names.enabled', 'Apply artist name rules', ''],
         ['artist_names.auto_lookup', 'Look up CJK artist names on MusicBrainz',
             'Uses the artist\'s official alias. No model involved; rules you add by hand always win.'],

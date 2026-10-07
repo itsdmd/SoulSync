@@ -13,10 +13,11 @@ All of it is configured from **LLM & Tagging** in the sidebar (under Settings).
 | 1.1 | Smarter search terms | When upstream's fixed queries are about to run, extra `artist title` variants are appended after them: the artist's other names from MusicBrainz, and alternative title spellings (romanized, original script, official English) from the model. A file found by a variant may be matched against that variant. |
 | 1.2 | Name translation | CJK song titles and album names are translated and written to tags and paths using a template (default `{translated} ({original})`). Every translation is stored once per name, so an album is always named the same. Edit one in the GUI and the model never overwrites it. |
 | 1.3 | Lyrics translation | CJK `.lrc` / `.txt` lyrics get a translated line under each original line (or a separate `<name>.en.lrc`). |
-| 1.4 | Model per task | Separate model for search terms, names and lyrics. Default `qwen3.5:4b`. |
+| 1.4 | Model per task | Separate model for search terms, names and lyrics. Default `qwen3.5:9b`. |
 | 2 | Artist tagging rules | `original name → name to use`, applied to tags and folders. CJK artists are resolved automatically from MusicBrainz aliases (no model); manual rules always win and work for any name. |
 | 3 | Discography: hide owned | "Hide owned" in the Download Discography dialog; owned releases are also shown as owned and left unchecked. |
-| 4 | Import: rename only | A switch on the Import page. The file is moved and renamed to the path format of the release it was matched to, and nothing inside the file changes: no tag rewrite, artwork, lyrics embed, ReplayGain or conversion. Applies to manual imports. |
+| 4 | Import: rename only | The file is moved and renamed to the path format of the release it was matched to, and nothing inside the file changes: no tag rewrite, artwork, lyrics embed, ReplayGain or conversion. Manual imports: the switch in the Import page header. Automatic watcher: "Rename only" in the Import page's settings (gear). |
+| 5 | Ownership across renamed names | "Already in the library?" no longer depends on a source name fuzzy-matching a translated library name. See below. |
 
 Ollama is reached at `OLLAMA_URL` (overridable in the panel). In the Portainer
 stack that is `http://ollama:11434` over the external Docker network
@@ -27,15 +28,9 @@ a minute at a time and everything else behaves like upstream.
 
 ### Things worth knowing
 
-- **Model quality.** `qwen3.5:4b` is fast and fine for lyrics and plain titles,
-  but it does invent romanizations and occasionally a wrong title. That is why
-  the artist half of a search variant never comes from the model. For better
-  names, set the "names" and "search terms" tasks to `qwen3.5:9b`.
-- **Translated names vs. library matching.** Tags and folders carry the
-  translated name, while metadata sources still report the original. The
-  default template keeps the original inside the name, which upstream's fuzzy
-  matching copes with; a template without `{original}` makes it much more
-  likely that SoulSync fails to recognise a track it already has.
+- **Model quality.** The default is `qwen3.5:9b`. Smaller models invent
+  romanizations and titles, which is why the artist half of a search variant
+  never comes from the model.
 - **Originals are kept** in `SOULSYNC_ORIGINAL_TITLE / _ALBUM / _ARTIST /
   _ALBUMARTIST` tags when a value is rewritten.
 - **Rename only** still names the path from the matched release (with artist
@@ -43,20 +38,50 @@ a minute at a time and everything else behaves like upstream.
   album. Integrity checking still runs; quality, AcoustID and silence checks
   do not.
 
+### How "already owned" works
+
+Sources report 周杰倫 / 夜曲; the library holds Jay Chou / "Nocturne (夜曲)".
+Upstream compares those strings fuzzily, finds nothing, and would download the
+track again on every scan. The fork adds three exact checks
+(`core/fork/ownership.py`):
+
+1. **External IDs** — in the pre-download analysis of every batch, a library
+   row carrying the source track's Spotify / Deezer / iTunes / MusicBrainz /
+   ISRC id means owned, whatever the names are. SoulSync embeds these ids in
+   every file it tags and reads them back into the library.
+2. **Recorded names** — `fork_translations` and `fork_artist_names` state which
+   name was written for which original; the source names are mapped through
+   them and upstream's check is repeated.
+3. **Original inside the library name** — a library title shaped
+   "<anything> (夜曲)" by one of the artist's known names is the source title
+   夜曲. This covers files translated before the fork existed (e.g. by
+   translate-music-library), whatever the English wording.
+
+2 and 3 wrap `check_track_exists`, `check_album_exists` and
+`check_album_exists_with_editions`, so wishlist, watchlist, discography
+completion and sync all benefit. They only run after upstream's own check
+missed and a CJK name or an artist rule is involved.
+
+Limits: 3 needs the original in the name, so it does not help with a template
+that drops `{original}` (1 and 2 still do). Rename-only imports write no ids,
+so those files rely on 2 and 3. The search page's "in library" badges use a
+separate key lookup and are not covered.
+
 ## Code layout
 
 New code lives in files upstream does not have:
 
 ```
 core/fork/            config, ollama client, sqlite store, translate, lyrics,
-                      artist_names, search_terms, tags, hooks
+                      artist_names, search_terms, tags, ownership, hooks
 api/fork.py           /api/fork/* endpoints
 webui/static/fork-ui.js                         the LLM & Tagging panel
 webui/src/routes/import/-import.fork.ts         rename-only preference
 webui/src/routes/import/-ui/rename-only-toggle.tsx
+webui/src/routes/import/-ui/auto-rename-only-row.tsx
 tests/fork/           Python tests
 webui/src/routes/artist-detail/-artist-detail.discography-modal.fork.test.ts
-deploy/portainer-stack.yml
+deploy/                stacks (SoulSync published + local test, Ollama), build-local.sh
 .github/workflows/fork-*.yml
 ```
 
@@ -80,12 +105,16 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/lyrics_client.py` | EOF wrapper around `LyricsClient.create_lrc_file` (lyrics translation) |
 | `core/imports/pipeline.py` | ReplayGain condition; EOF wrapper around `_apply_profile_output_transforms` |
 | `core/imports/routes.py` | 2 × `mark_rename_only(...)` |
+| `core/auto_import_worker.py` | 2 lines: rename-only for the watcher |
+| `core/downloads/master.py` | 7 lines: external-id ownership before a track is queued |
+| `database/music_database.py` | EOF wrappers around the three `check_*_exists` methods |
 | `web_server.py` | registers the `api/fork.py` blueprint |
 | `webui/index.html` | one `<script>` tag for `fork-ui.js` |
 | `webui/src/routes/artist-detail/-artist-detail.discography-modal.ts` | ownership fallback, `hideOwned` filter |
 | `webui/src/routes/artist-detail/-ui/discography-modal.tsx` | "Hide owned" button |
 | `webui/src/routes/import/-import.api.ts` | sends `rename_only` |
 | `webui/src/routes/import/-ui/import-page.tsx` | mounts the switch |
+| `webui/src/routes/import/-ui/settings-drawer.tsx` | mounts the watcher's rename-only row |
 
 Hooks are fail-safe (an exception returns upstream's value) and inert under
 pytest unless `SOULSYNC_FORK_TESTING=1`, so upstream's test suite never reaches
@@ -103,7 +132,7 @@ Branches:
 
 1. fast-forwards `main` to upstream;
 2. merges it into `custom`;
-3. clean merge → pushes, which builds a new image;
+3. clean merge → pushes (publishing an image stays a manual step);
 4. conflict → leaves `custom` alone and opens an **"Upstream sync conflict"**
    issue listing the files (closed automatically once it merges cleanly again).
 
@@ -128,12 +157,25 @@ merge commits, and covers `tests/fork/` too.
 
 ## Deploying
 
-`.github/workflows/fork-docker.yml` publishes
-`ghcr.io/itsdmd/soulsync:latest` (and `:<commit sha>`) on every push to
-`custom`. `deploy/portainer-stack.yml` is the stack definition: paste it into
-the Portainer stack, keep the stack name, and redeploy with "re-pull image" to
-update. The package is private until made public in GitHub → Packages (or add
-ghcr.io as a registry in Portainer with a `read:packages` token).
+**Test locally first.**
+
+```bash
+./deploy/build-local.sh          # builds soulsync-fork:local on this host
+```
+
+Deploy `deploy/portainer-stack.local.yml` in Portainer with "Re-pull image"
+off (the image only exists locally). It uses the same ports and volumes as the
+normal stack, so stop that one first.
+
+**Publish when it is good.** Run the "Fork: build image" workflow (Actions tab,
+or `gh workflow run fork-docker.yml --ref custom`). It pushes
+`ghcr.io/itsdmd/soulsync:latest` and `:<commit sha>`; then use
+`deploy/portainer-stack.yml`. The package is private until made public in
+GitHub → Packages (or add ghcr.io as a registry in Portainer with a
+`read:packages` token).
+
+**Ollama.** `deploy/ollama-stack.yml` reproduces the current Ollama container
+as a stack and joins it to `ollama-net`, which both SoulSync stacks use.
 
 To roll back, pin `image:` to a previous `:<commit sha>` tag, or to
 `boulderbadgedad/soulsync:latest` for stock upstream — the fork's tables and

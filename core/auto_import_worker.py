@@ -2253,6 +2253,8 @@ class AutoImportWorker:
                 if auto_import_profile_id:
                     context['track_info']['quality_profile_id'] = auto_import_profile_id
 
+                from core.fork import hooks as _fork_hooks
+                _fork_hooks.mark_rename_only(context, _fork_hooks.auto_import_rename_only())  # fork
                 self._process_callback(context_key, context, file_path)
                 rejection = import_rejection_reason(context)
                 final_path = context.get('_final_processed_path') or context.get('_final_path')

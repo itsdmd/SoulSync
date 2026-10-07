@@ -1,16 +1,15 @@
 name: "Fork: build image"
 
-# Publishes ghcr.io/<owner>/soulsync from the fork branch. The Portainer
-# stack (deploy/portainer-stack.yml) pulls :latest.
+# Publishes ghcr.io/<owner>/soulsync from the fork branch, for the Portainer
+# stack in deploy/portainer-stack.yml.
+#
+# Manual on purpose: build and test locally first (deploy/build-local.sh +
+# deploy/portainer-stack.local.yml), then run this from the Actions tab or
+#   gh workflow run fork-docker.yml --ref custom
+# To publish automatically on every push to `custom` instead, add:
+#   push: { branches: [custom] }
 
 on:
-  push:
-    branches:
-      - custom
-    paths-ignore:
-      - '**.md'
-      - 'tests/**'
-      - 'deploy/**'
   workflow_dispatch:
 
 concurrency:

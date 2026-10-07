@@ -24,7 +24,7 @@ def client(monkeypatch):
 
 def test_settings_round_trip_keeps_only_known_keys(client, fork_env):
     data = client.get("/api/fork/settings").get_json()
-    assert data["settings"]["models"] == {"search_terms": "qwen3.5:4b", "names": "qwen3.5:4b", "lyrics": "qwen3.5:4b"}
+    assert data["settings"]["models"] == {"search_terms": "qwen3.5:9b", "names": "qwen3.5:9b", "lyrics": "qwen3.5:9b"}
     resp = client.post("/api/fork/settings", json={
         "models": {"lyrics": "gemma4:12b", "bogus": "x"},
         "translate": {"template": "{translated} [{original}]", "titles": False},
@@ -32,7 +32,7 @@ def test_settings_round_trip_keeps_only_known_keys(client, fork_env):
         "unknown_section": {"a": 1},
     }).get_json()
     assert resp["settings"]["models"]["lyrics"] == "gemma4:12b"
-    assert resp["settings"]["models"]["names"] == "qwen3.5:4b"
+    assert resp["settings"]["models"]["names"] == "qwen3.5:9b"
     assert resp["settings"]["translate"]["titles"] is False
     assert resp["settings"]["search_terms"]["max_variants"] == 2
     assert fork_env.data["fork"] == {

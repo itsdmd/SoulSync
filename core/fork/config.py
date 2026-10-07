@@ -11,7 +11,7 @@ import copy
 import os
 from typing import Any, Dict
 
-DEFAULT_MODEL = "qwen3.5:4b"
+DEFAULT_MODEL = "qwen3.5:9b"
 
 # Task name -> human label. One model setting per task.
 MODEL_TASKS = {
@@ -58,6 +58,11 @@ def defaults() -> Dict[str, Any]:
         "artist_names": {
             "enabled": True,
             "auto_lookup": True,
+        },
+        "import": {
+            # The automatic import watcher moves/renames only, leaving file
+            # metadata untouched (manual imports have their own switch).
+            "rename_only_auto": False,
         },
     }
 

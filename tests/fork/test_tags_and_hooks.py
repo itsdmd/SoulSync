@@ -139,3 +139,12 @@ def test_rename_only_skips_enhancement_lyrics_and_transforms(tmp_path, monkeypat
     assert enrichment.enhance_file_metadata(path, context, {}, {}) is True
     assert metadata_lyrics.generate_lrc_file(path, context, {}, {}) is False
     assert pipeline._apply_profile_output_transforms(path, context, {}) == path
+
+
+def test_watcher_rename_only_follows_the_setting(fork_env):
+    assert hooks.auto_import_rename_only() is False
+    fork_env.set("fork.import.rename_only_auto", True)
+    assert hooks.auto_import_rename_only() is True
+    context = {}
+    hooks.mark_rename_only(context, hooks.auto_import_rename_only())
+    assert hooks.is_rename_only(context)

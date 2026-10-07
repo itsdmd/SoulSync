@@ -1,0 +1,41 @@
+# Portainer stack for Ollama, matching the container that currently runs via
+# `docker run`: same image, GPU access, named volume `ollama` (your models),
+# port 11434 and environment. It additionally joins `ollama-net`, the network
+# the SoulSync stack uses to reach it as http://ollama:11434.
+#
+# Switching over (the models volume is reused, nothing is re-downloaded):
+#   1. docker stop ollama && docker rm ollama
+#   2. deploy this file as a stack in Portainer
+# The Cloudflare tunnels (cft-ollama*) run on the host network and use the
+# published port, so they keep working.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_KEEP_ALIVE=15m
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    networks:
+      - default
+      - ollama-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+volumes:
+  ollama:
+    external: true
+
+networks:
+  ollama-net:
+    external: true

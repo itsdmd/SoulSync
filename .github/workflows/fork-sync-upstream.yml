@@ -3,8 +3,9 @@ name: "Fork: sync upstream"
 # Keeps this fork current with Nezreka/SoulSync.
 #   main    mirrors upstream/main exactly (fast-forward only, never edited here)
 #   custom  = main + the fork's changes; upstream is MERGED into it
-# A clean merge is pushed and a new image is built. A conflict opens (or
-# updates) an issue listing the files and leaves `custom` untouched.
+# A clean merge is pushed (no image is published: that is a manual step, see
+# fork-docker.yml). A conflict opens (or updates) an issue listing the files
+# and leaves `custom` untouched.
 #
 # Set a SYNC_TOKEN secret (PAT with contents, workflows and issues write) so
 # merges that touch upstream's workflow files can be pushed; the default
@@ -22,7 +23,6 @@ concurrency:
 permissions:
   contents: write
   issues: write
-  actions: write
 
 env:
   UPSTREAM_REPO: Nezreka/SoulSync
@@ -84,12 +84,6 @@ jobs:
       - name: Push the merge
         if: steps.merge.outputs.result == 'merged'
         run: git push origin "HEAD:${FORK_BRANCH}"
-
-      # A push made with GITHUB_TOKEN does not start other workflows, so the
-      # image build has to be asked for explicitly in that case.
-      - name: Start the image build
-        if: steps.merge.outputs.result == 'merged' && env.HAS_SYNC_TOKEN != 'true'
-        run: gh workflow run fork-docker.yml --ref "${FORK_BRANCH}"
 
       - name: Close a stale conflict issue
         if: steps.merge.outputs.result != 'conflict'

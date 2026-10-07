@@ -133,6 +133,18 @@ def is_rename_only(context: Any) -> bool:
     return isinstance(context, dict) and bool(context.get(RENAME_ONLY_KEY))
 
 
+def auto_import_rename_only() -> bool:
+    """Whether the automatic import watcher files tracks rename-only."""
+    if not _active():
+        return False
+    try:
+        from core.fork import config
+
+        return bool(config.get("import.rename_only_auto"))
+    except Exception:
+        return False
+
+
 def mark_rename_only(context: Any, requested: Any) -> None:
     """Flag an import context so the pipeline files the track without
     rewriting any of its metadata."""
@@ -145,3 +157,31 @@ def mark_rename_only(context: Any, requested: Any) -> None:
             if check not in skip:
                 skip.append(check)
         context["_skip_quarantine_check"] = skip
+
+
+# ── ownership: library names differ from source names ───────────────────
+
+def ownership_retry(db: Any, kind: str, name: str, artist: str, threshold: float,
+                    attempt: Callable[[str, str], Any], first: Any) -> Any:
+    if not _active():
+        return first
+    try:
+        from core.fork import ownership
+
+        return ownership.retry_check(db, kind, name, artist, threshold, attempt, first)
+    except Exception as exc:
+        logger.warning("ownership_retry failed: %s", exc)
+        return first
+
+
+def owned_by_external_id(db: Any, track: Any, server_source: Optional[str] = None) -> Any:
+    """Library track sharing an external id with ``track``, or None."""
+    if not _active():
+        return None
+    try:
+        from core.fork import ownership
+
+        return ownership.find_by_external_id(db, track, server_source)
+    except Exception as exc:
+        logger.debug("owned_by_external_id failed: %s", exc)
+        return None

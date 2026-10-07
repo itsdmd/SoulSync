@@ -26105,3 +26105,42 @@ def close_database():
                 # Ignore threading errors during shutdown
                 logger.debug("db instance close: %s", e)
         _database_instances.clear()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Ownership checks compare source names with library names. The fork writes
+# translated names and artist rules to the library, so a check that finds
+# nothing is repeated under the names the library actually holds. See
+# core/fork/ownership.py and FORK.md.
+_upstream_check_track_exists = MusicDatabase.check_track_exists
+_upstream_check_album_exists = MusicDatabase.check_album_exists
+_upstream_check_album_exists_with_editions = MusicDatabase.check_album_exists_with_editions
+
+
+def _fork_check_track_exists(self, title: str, artist: str, confidence_threshold: float = 0.8, *args, **kwargs):
+    from core.fork import hooks as _fork_hooks
+    first = _upstream_check_track_exists(self, title, artist, confidence_threshold, *args, **kwargs)
+    return _fork_hooks.ownership_retry(
+        self, "title", title, artist, confidence_threshold,
+        lambda t, a: _upstream_check_track_exists(self, t, a, confidence_threshold, *args, **kwargs), first)
+
+
+def _fork_check_album_exists(self, title: str, artist: str, confidence_threshold: float = 0.8, *args, **kwargs):
+    from core.fork import hooks as _fork_hooks
+    first = _upstream_check_album_exists(self, title, artist, confidence_threshold, *args, **kwargs)
+    return _fork_hooks.ownership_retry(
+        self, "album", title, artist, confidence_threshold,
+        lambda t, a: _upstream_check_album_exists(self, t, a, confidence_threshold, *args, **kwargs), first)
+
+
+def _fork_check_album_exists_with_editions(self, title: str, artist: str, confidence_threshold: float = 0.8, *args, **kwargs):
+    from core.fork import hooks as _fork_hooks
+    first = _upstream_check_album_exists_with_editions(self, title, artist, confidence_threshold, *args, **kwargs)
+    return _fork_hooks.ownership_retry(
+        self, "album", title, artist, confidence_threshold,
+        lambda t, a: _upstream_check_album_exists_with_editions(self, t, a, confidence_threshold, *args, **kwargs), first)
+
+
+MusicDatabase.check_track_exists = _fork_check_track_exists
+MusicDatabase.check_album_exists = _fork_check_album_exists
+MusicDatabase.check_album_exists_with_editions = _fork_check_album_exists_with_editions

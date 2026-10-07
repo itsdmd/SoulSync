@@ -10,6 +10,7 @@ import {
   qualityProfilesQueryOptions,
   saveAutoImportSettings,
 } from '../-import.api';
+import { AutoRenameOnlyRow } from './auto-rename-only-row';
 import styles from './import-page.module.css';
 import { getErrorMessage } from './import-shared';
 
@@ -155,6 +156,7 @@ export function SettingsDrawer({
               </Select>
             </div>
           </div>
+          <AutoRenameOnlyRow open={open} />
         </div>
       </DialogBody>
       <DialogFooter>
