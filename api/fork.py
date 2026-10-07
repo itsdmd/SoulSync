@@ -222,7 +222,13 @@ def save_artist_name():
     replacement = " ".join(str(body.get("replacement") or "").split())
     if not original or not replacement:
         return jsonify(success=False, error="original and replacement are required"), 400
+    previous = store.get_artist_name(original)
     store.save_artist_name(original, replacement, "manual")
+    if previous and previous.get("replacement") and previous["replacement"] != replacement:
+        from core.fork import retro
+
+        # files tagged under the old rule keep being recognised as this artist
+        retro.remember_previous_name(original, previous["replacement"])
     return jsonify(success=True)
 
 
@@ -231,6 +237,47 @@ def save_artist_name():
 def delete_artist_name():
     removed = store.delete_artist_name(str(_body().get("original") or "").strip())
     return jsonify(success=removed), (200 if removed else 404)
+
+
+@bp.route("/api/fork/artist-names/apply", methods=["POST"])
+@admin_only
+def apply_artist_rule_to_library():
+    """Rewrite files that still carry the artist's old name to the rule's
+    current one. ``dry_run`` returns what would change without writing."""
+    from core.fork import retro
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        data = retro.apply_artist_rule(
+            get_database(), str(body.get("original") or "").strip(),
+            rename=body.get("rename", True) is not False, dry_run=body.get("dry_run") is True,
+            folder=str(body.get("folder") or "").strip() or None)
+    except (PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    except LookupError as exc:
+        return jsonify(success=False, error=str(exc)), 404
+    return jsonify(success=True, **data)
+
+
+@bp.route("/api/fork/artist-names/apply-all", methods=["POST"])
+@admin_only
+def apply_all_artist_rules():
+    from core.fork import retro
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        job = retro.start_apply_all_rules(
+            get_database, rename=body.get("rename", True) is not False,
+            dry_run=body.get("dry_run") is True, folder=str(body.get("folder") or "").strip() or None)
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    except RuntimeError as exc:
+        return jsonify(success=False, error=str(exc)), 409
+    return jsonify(success=True, job=job)
 
 
 @bp.route("/api/fork/artist-names/lookup", methods=["POST"])

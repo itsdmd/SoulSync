@@ -370,21 +370,16 @@ def run_apply_all(db: Any, kind: Optional[str] = None, rename: bool = True, dry_
     return totals
 
 
-def start_apply_all(db_factory: Any, kind: Optional[str] = None, rename: bool = True,
-                    dry_run: bool = False, folder: Optional[str] = None) -> Dict[str, Any]:
-    """Run :func:`run_apply_all` in the background (a large library takes a
-    while); poll :func:`job_status`. One run at a time."""
-    from core.fork import album_tagging
-
-    if folder:
-        folder = album_tagging.safe_dir(folder)   # fail now, not in the thread
+def _start_job(label: str, folder: Optional[str], dry_run: bool, runner: Any) -> Dict[str, Any]:
+    """Run ``runner(progress)`` in the background (a large library takes a
+    while); poll :func:`job_status`. One run at a time, of either kind."""
     with _job_lock:
         if _job.get("running"):
             raise RuntimeError("An apply-all run is already in progress")
         job_id = int(_job.get("id") or 0) + 1
         _job.clear()
         _job.update({"id": job_id, "running": True, "done": 0, "total": 0, "dry_run": dry_run,
-                     "folder": folder or "", "result": None, "error": None})
+                     "what": label, "folder": folder or "", "result": None, "error": None})
 
     def progress(done: int, total: int) -> None:
         with _job_lock:
@@ -394,7 +389,7 @@ def start_apply_all(db_factory: Any, kind: Optional[str] = None, rename: bool = 
     def work() -> None:
         result, error = None, None
         try:
-            result = run_apply_all(db_factory(), kind, rename, dry_run, folder, progress)
+            result = runner(progress)
         except Exception as exc:  # noqa: BLE001 - reported to the caller through the status
             logger.exception("apply-all failed")
             error = str(exc)
@@ -404,6 +399,292 @@ def start_apply_all(db_factory: Any, kind: Optional[str] = None, rename: bool = 
 
     threading.Thread(target=work, name="fork-apply-all", daemon=True).start()
     return job_status()
+
+
+def start_apply_all(db_factory: Any, kind: Optional[str] = None, rename: bool = True,
+                    dry_run: bool = False, folder: Optional[str] = None) -> Dict[str, Any]:
+    from core.fork import album_tagging
+
+    if folder:
+        folder = album_tagging.safe_dir(folder)   # fail now, not in the thread
+    return _start_job("translations", folder, dry_run,
+                      lambda progress: run_apply_all(db_factory(), kind, rename, dry_run, folder, progress))
+
+
+# ── artist rules ────────────────────────────────────────────────────────
+
+def _artist_names_for(original: str) -> List[str]:
+    """Every name the library may still hold for the artist a rule is about:
+    the original itself, and its other known names — MusicBrainz aliases and
+    what the rule USED to say before it was changed."""
+    names = [original]
+    for alias in (store.get_artist_aliases(original) or {}).get("aliases") or []:
+        if isinstance(alias, str) and alias.strip() and alias not in names:
+            names.append(alias.strip())
+    return names
+
+
+def remember_previous_name(original: str, previous: str) -> None:
+    """Keep a rule's old replacement as a known name of the artist, so files
+    tagged with it are still found (and still count as owned) after the rule
+    changes."""
+    previous = (previous or "").strip()
+    if not previous or _norm(previous) == _norm(original):
+        return
+    known = list((store.get_artist_aliases(original) or {}).get("aliases") or [])
+    if _norm(previous) not in {_norm(k) for k in known}:
+        store.save_artist_aliases(original, known + [previous])
+
+
+def library_artist_tracks(db: Any, names: List[str]) -> List[Dict[str, Any]]:
+    patterns: List[str] = []
+    for name in names:
+        for variant in script_variants(name):
+            if variant not in patterns:
+                patterns.append(variant)
+    where = " OR ".join("ar.name LIKE ? ESCAPE '\\'" for _ in patterns)
+    return _query(db, _TRACK_SQL.format(where=f"({where})"), (*[_like(p) for p in patterns], _MAX_ROWS))
+
+
+def plan_artist_file(path: str, original: str, replacement: str, known: List[str]) -> Optional[Dict[str, Any]]:
+    """What applying the rule would change in one file's ARTIST / ALBUMARTIST."""
+    from mutagen import File as MutagenFile
+
+    from core.fork import artist_format, artist_names
+
+    audio = MutagenFile(path)
+    if audio is None or audio.tags is None:
+        return None
+    kind_tag = tags._kind(audio)
+    if not kind_tag:
+        return None
+    wanted = {_norm(n) for n in known}
+    fields: Dict[str, Dict[str, Any]] = {}
+    for field in ("artist", "albumartist"):
+        current = artist_format.current_names(audio, field)
+        if not current:
+            continue
+        recorded = _original_of(audio, kind_tag, field)
+        recorded_names = artist_format.artist_list(recorded) if recorded else []
+        if recorded_names and any(_norm(n) in wanted for n in recorded_names):
+            # rebuild from the true original credit, with every rule applied
+            target = [artist_names.resolve(n, allow_lookup=False) for n in recorded_names]
+        elif any(_norm(n) in wanted for n in current):
+            target = [replacement if _norm(n) in wanted else n for n in current]
+        else:
+            continue
+        deduped: List[str] = []
+        for name in target:
+            if name and _norm(name) not in {_norm(d) for d in deduped}:
+                deduped.append(name)
+        stored = artist_format.read_values(audio, field)
+        if deduped and artist_format.tag_values(deduped) != stored:
+            fields[field] = {"names": deduped, "old_names": current,
+                             "old": artist_format.display(current), "new": artist_format.display(deduped),
+                             "original": recorded or artist_format.display(current)}
+    if not fields:
+        return None
+    first = fields.get("artist") or fields["albumartist"]
+    return {"path": path, "fields": fields, "old": first["old"], "new": first["new"]}
+
+
+def _renamed_path(path: str, root: str, swaps: List[Tuple[str, str]]) -> str:
+    """``path`` with the old artist name replaced in every folder and file
+    name below ``root`` that carries it."""
+    rel = os.path.relpath(path, root)
+    parts = rel.split(os.sep)
+    out = []
+    for part in parts:
+        for old, new in swaps:
+            changed = _renamed(part, old, new)
+            if changed:
+                part = changed
+                break
+        out.append(part)
+    return os.path.join(root, *out)
+
+
+def _move_file(src: str, dst: str) -> None:
+    import shutil
+
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(src, dst)
+    src_stem, dst_stem = os.path.splitext(src)[0], os.path.splitext(dst)[0]
+    for suffix in _SIDECARS:
+        if os.path.isfile(src_stem + suffix) and not os.path.exists(dst_stem + suffix):
+            shutil.move(src_stem + suffix, dst_stem + suffix)
+    _update_db_path(src, dst)
+
+
+def _carry_leftovers(old_dir: str, new_dir: str, stop: str) -> None:
+    """After the audio left ``old_dir``: bring cover art and the like along,
+    then remove the folders that are now empty, up to (not including) ``stop``."""
+    import shutil
+
+    if os.path.isdir(old_dir) and os.path.normpath(old_dir) != os.path.normpath(new_dir):
+        exts = None
+        try:
+            from core.fork import album_tagging
+
+            exts = album_tagging._audio_exts()
+        except Exception:
+            exts = set()
+        names = os.listdir(old_dir)
+        if not any(os.path.splitext(n)[1].lower() in exts for n in names):
+            for name in names:
+                src, dst = os.path.join(old_dir, name), os.path.join(new_dir, name)
+                if os.path.isfile(src) and not os.path.exists(dst):
+                    os.makedirs(new_dir, exist_ok=True)
+                    shutil.move(src, dst)
+    current = old_dir
+    while os.path.isdir(current) and os.path.normpath(current) != os.path.normpath(stop):
+        try:
+            os.rmdir(current)
+        except OSError:
+            break
+        current = os.path.dirname(current)
+
+
+def apply_artist_rule(db: Any, original: str, rename: bool = True, dry_run: bool = False,
+                      folder: Optional[str] = None, paths: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Rewrite ARTIST / ALBUMARTIST on files that still carry the artist's old
+    name to what the rule says now; optionally rename folders and files whose
+    names contain the old name (merging into an existing artist folder)."""
+    from mutagen import File as MutagenFile
+
+    from core.fork import album_tagging, artist_format
+
+    original = (original or "").strip()
+    rule = store.get_artist_name(original) if original else None
+    if not rule or rule.get("source") == "none" or not rule.get("replacement"):
+        raise LookupError("No rule for this artist")
+    replacement = rule["replacement"]
+    known = _artist_names_for(original)
+
+    unreachable = 0
+    if paths is None:
+        if folder:
+            paths = _folder_files(folder)
+        else:
+            paths = []
+            for track in library_artist_tracks(db, known):
+                path = _resolve(track.get("file_path"))
+                if not path or not os.path.isfile(path):
+                    unreachable += 1
+                elif path not in paths and album_tagging.root_of(path) is not None:
+                    paths.append(path)
+
+    plans: List[Dict[str, Any]] = []
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        try:
+            plan = plan_artist_file(path, original, replacement, known)
+        except Exception as exc:
+            logger.debug("Could not read %s: %s", path, exc)
+            continue
+        if not plan:
+            continue
+        if rename:
+            root = album_tagging.root_of(path)
+            swaps = []
+            for info in plan["fields"].values():
+                for name in info["old_names"]:
+                    if _norm(name) in {_norm(k) for k in known} and (name, replacement) not in swaps:
+                        swaps.append((name, replacement))
+            target = _renamed_path(path, root, swaps) if root and swaps else path
+            plan["move_to"] = target if os.path.normpath(target) != os.path.normpath(path) else None
+            plan["rename_to"] = os.path.relpath(target, root) if plan["move_to"] else None
+        plans.append(plan)
+
+    result: Dict[str, Any] = {
+        "kind": "artist", "original": original, "display": replacement,
+        "files": [{"path": p["path"], "old": p["old"], "new": p["new"], "rename_to": p.get("rename_to")} for p in plans],
+        "folders": [], "checked": len(paths), "unreachable": unreachable, "dry_run": dry_run,
+        "folder": folder or "", "written": 0, "renamed": 0, "errors": [],
+    }
+    if dry_run:
+        return result
+
+    touched_dirs: List[Tuple[str, str, str]] = []
+    for plan in plans:
+        path = plan["path"]
+        try:
+            audio = MutagenFile(path)
+            kind_tag = tags._kind(audio)
+            for field, info in plan["fields"].items():
+                artist_format.write_values(audio, field, info["names"])
+                if info["original"]:
+                    tags._write_original(audio, kind_tag, field, info["original"])
+            tags._save(audio)
+            result["written"] += 1
+        except Exception as exc:
+            result["errors"].append(f"{os.path.basename(path)}: {exc}")
+            continue
+        target = plan.get("move_to")
+        if rename and target:
+            try:
+                if os.path.exists(target):
+                    raise FileExistsError("A file already exists at the new location")
+                _move_file(path, target)
+                result["renamed"] += 1
+                entry = (os.path.dirname(path), os.path.dirname(target), album_tagging.root_of(target) or "")
+                if entry not in touched_dirs:
+                    touched_dirs.append(entry)
+            except Exception as exc:
+                result["errors"].append(f"{os.path.basename(path)}: move failed: {exc}")
+    # deepest first, so an album folder is emptied before its artist folder
+    for old_dir, new_dir, root in sorted(touched_dirs, key=lambda item: -len(item[0])):
+        try:
+            _carry_leftovers(old_dir, new_dir, root)
+        except Exception as exc:
+            logger.debug("Could not tidy %s: %s", old_dir, exc)
+    logger.info("Applied artist rule %r -> %r: %s tag(s), %s move(s), %s error(s)",
+                original, replacement, result["written"], result["renamed"], len(result["errors"]))
+    return result
+
+
+def run_apply_all_rules(db: Any, rename: bool = True, dry_run: bool = False,
+                        folder: Optional[str] = None, progress: Optional[Any] = None) -> Dict[str, Any]:
+    rules = store.list_artist_names(limit=1_000_000)["items"]
+    totals: Dict[str, Any] = {"total": len(rules), "done": 0, "names_changed": 0, "files": 0, "folders": 0,
+                              "written": 0, "renamed": 0, "errors": [], "samples": [],
+                              "dry_run": dry_run, "folder": folder or ""}
+    paths = _folder_files(folder) if folder else None
+    for rule in rules:
+        try:
+            if paths is not None and totals["renamed"] and not dry_run:
+                paths = _folder_files(folder) if folder and os.path.isdir(folder) else []
+            data = apply_artist_rule(db, rule["original"], rename=rename, dry_run=dry_run,
+                                     folder=folder, paths=paths)
+        except Exception as exc:
+            totals["errors"].append(f"{rule['original']}: {exc}")
+            data = None
+        if data and data["files"]:
+            totals["names_changed"] += 1
+            totals["files"] += len(data["files"])
+            totals["folders"] += sum(1 for f in data["files"] if f.get("rename_to"))
+            totals["written"] += data["written"]
+            totals["renamed"] += data["renamed"]
+            totals["errors"] += data["errors"]
+            for item in data["files"]:
+                if len(totals["samples"]) < _SAMPLE_LIMIT:
+                    totals["samples"].append({"kind": "artist", "file": os.path.basename(item["path"]),
+                                              "old": item["old"], "new": item["new"]})
+        totals["done"] += 1
+        if progress:
+            progress(totals["done"], totals["total"])
+    return totals
+
+
+def start_apply_all_rules(db_factory: Any, rename: bool = True, dry_run: bool = False,
+                          folder: Optional[str] = None) -> Dict[str, Any]:
+    from core.fork import album_tagging
+
+    if folder:
+        folder = album_tagging.safe_dir(folder)
+    return _start_job("artist rules", folder, dry_run,
+                      lambda progress: run_apply_all_rules(db_factory(), rename, dry_run, folder, progress))
 
 
 # ── details pop-up ──────────────────────────────────────────────────────

@@ -310,3 +310,119 @@ def test_database_search_finds_the_other_script(lib):
     store.save_translation("album", "相變臨界", "Critical Phase Transition", user_edited=True)
     data = retro.apply_translation(lib["db"], "album", "相變臨界", rename=False)
     assert data["written"] == 1 and FLAC(path)["album"] == ["Critical Phase Transition (相变临界)"]
+
+
+# ── artist rules ────────────────────────────────────────────────────────
+
+@pytest.fixture
+def msr(lib, monkeypatch):
+    """Two albums by 塞壬唱片-MSR, tagged before any rule existed."""
+    from core.fork import artist_names
+
+    class NoMB:
+        def search_artist(self, name, **kwargs):
+            return []
+
+    monkeypatch.setattr(artist_names, "_mb_client", lambda: NoMB())
+    artist_names._single_artist_cache.clear()
+    moves = []
+    def moved(old, new):
+        moves.append((old, new))
+        conn = lib["db"]._get_connection()
+        conn.execute("UPDATE tracks SET file_path = ? WHERE file_path = ?", (new, old))
+        conn.commit()
+        conn.close()
+    monkeypatch.setattr(retro, "_update_db_path", moved)
+    root = lib["root"]
+    files = []
+    for album in ("Alpha", "Beta"):
+        folder = root / "塞壬唱片-MSR" / f"塞壬唱片-MSR - {album}"
+        for n in (1, 2):
+            path = _flac(str(folder / f"0{n} - Song {n}.flac"), title=f"Song {n}", album=album,
+                         artist="塞壬唱片-MSR", albumartist="塞壬唱片-MSR")
+            lib["db"].add("塞壬唱片-MSR", album, f"Song {n}", n, path)
+            files.append(path)
+        (folder / "cover.jpg").write_bytes(b"jpg")
+    return {**lib, "msr_files": files, "moves": moves}
+
+
+def test_artist_rule_dry_run(msr):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR", dry_run=True)
+    assert len(data["files"]) == 4 and data["written"] == 0
+    assert {(f["old"], f["new"]) for f in data["files"]} == {("塞壬唱片-MSR", "Monster Siren Records")}
+    assert sorted(f["rename_to"] for f in data["files"])[0] == os.path.join(
+        "Monster Siren Records", "Monster Siren Records - Alpha", "01 - Song 1.flac")
+    assert all(os.path.isfile(p) for p in msr["msr_files"])
+
+
+def test_artist_rule_retags_and_moves_everything_including_cover_art(msr):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR")
+    assert data["written"] == 4 and data["renamed"] == 4 and data["errors"] == []
+    new_album = msr["root"] / "Monster Siren Records" / "Monster Siren Records - Alpha"
+    assert sorted(os.listdir(new_album)) == ["01 - Song 1.flac", "02 - Song 2.flac", "cover.jpg"]
+    audio = FLAC(str(new_album / "01 - Song 1.flac"))
+    assert audio["artist"] == ["Monster Siren Records"] and audio["albumartist"] == ["Monster Siren Records"]
+    assert audio["soulsync_original_artist"] == ["塞壬唱片-MSR"]
+    assert not (msr["root"] / "塞壬唱片-MSR").exists()          # the old artist folder is gone
+    assert len(msr["moves"]) == 4
+    assert retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR")["files"] == []   # nothing left to do
+
+
+def test_artist_rule_merges_into_an_existing_artist_folder(msr):
+    existing = _flac(str(msr["root"] / "Monster Siren Records" / "Monster Siren Records - Gamma" / "01 - G.flac"),
+                     artist="Monster Siren Records")
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR")
+    assert data["errors"] == [] and data["renamed"] == 4
+    assert sorted(os.listdir(msr["root"] / "Monster Siren Records")) == [
+        "Monster Siren Records - Alpha", "Monster Siren Records - Beta", "Monster Siren Records - Gamma"]
+    assert os.path.isfile(existing)
+
+
+def test_artist_rule_tags_only_and_folder_target(msr):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    alpha = msr["root"] / "塞壬唱片-MSR" / "塞壬唱片-MSR - Alpha"
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR", rename=False, folder=str(alpha))
+    assert data["written"] == 2 and data["renamed"] == 0
+    assert FLAC(msr["msr_files"][0])["artist"] == ["Monster Siren Records"]
+    assert FLAC(msr["msr_files"][2])["artist"] == ["塞壬唱片-MSR"]       # Beta was outside the folder
+
+
+def test_changing_a_rule_later_still_finds_files_tagged_under_the_old_one(msr):
+    store.save_artist_name("塞壬唱片-MSR", "MSR", "manual")
+    retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR")
+    # the user changes their mind
+    retro.remember_previous_name("塞壬唱片-MSR", "MSR")
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR")
+    assert data["written"] == 4 and data["errors"] == []
+    new_album = msr["root"] / "Monster Siren Records" / "Monster Siren Records - Alpha"
+    assert FLAC(str(new_album / "01 - Song 1.flac"))["artist"] == ["Monster Siren Records"]
+    assert not (msr["root"] / "MSR").exists()
+
+
+def test_artist_rule_only_replaces_that_artist_in_a_shared_credit(msr):
+    path = _flac(str(msr["root"] / "Other" / "Other - Collab" / "01 - Duo.flac"), title="Duo",
+                 artist="Someone, 塞壬唱片-MSR", albumartist="Someone")
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    data = retro.apply_artist_rule(msr["db"], "塞壬唱片-MSR", folder=str(msr["root"] / "Other"))
+    assert data["written"] == 1
+    audio = FLAC(path if os.path.exists(path) else data["files"][0]["path"])
+    assert audio["artist"] == ["Someone", "Monster Siren Records"] and audio["albumartist"] == ["Someone"]
+    assert os.path.exists(path)          # filed under "Other": no folder carries the old name, nothing moves
+
+
+def test_apply_all_rules_and_missing_rule(msr):
+    store.save_artist_name("塞壬唱片-MSR", "Monster Siren Records", "manual")
+    store.save_artist_name("無人", "Nobody", "manual")
+    store.save_artist_name("查無此人", "", "none")                      # a cached miss is not a rule
+    preview = retro.run_apply_all_rules(msr["db"], dry_run=True)
+    assert preview["total"] == 2 and preview["names_changed"] == 1 and preview["files"] == 4
+    done = retro.run_apply_all_rules(msr["db"])
+    assert done["written"] == 4 and done["renamed"] == 4 and done["errors"] == []
+    with pytest.raises(LookupError):
+        retro.apply_artist_rule(msr["db"], "查無此人")
+    with pytest.raises(LookupError):
+        retro.apply_artist_rule(msr["db"], "沒有規則")

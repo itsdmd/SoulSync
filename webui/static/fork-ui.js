@@ -472,6 +472,22 @@
                     el('button', { class: 'fork-btn', text: 'Save', onclick: commit }),
                     ' ',
                     el('button', {
+                        class: 'fork-btn', text: 'Apply to library…',
+                        title: 'Update files already in your library that still credit this artist under the old name',
+                        onclick: async () => {
+                            // an unsaved edit in the box is saved first, so what is applied is what is shown
+                            const value = input.value.trim();
+                            if (value && value !== item.replacement) {
+                                try {
+                                    await api('/artist-names', 'PUT', { original: item.original, replacement: value });
+                                    item.replacement = value;
+                                } catch (err) { toast(err.message, 'error'); return; }
+                            }
+                            openApply('artist', item.original, load);
+                        },
+                    }),
+                    ' ',
+                    el('button', {
                         class: 'fork-btn danger', text: 'Delete',
                         onclick: async () => {
                             try { await api('/artist-names', 'DELETE', { original: item.original }); load(); }
@@ -511,6 +527,11 @@
             ]),
             el('div', { class: 'fork-bar' }, [
                 el('input', { class: 'fork-input', placeholder: 'Search rules…', oninput: (e) => { search = e.target.value; load(); } }),
+                el('button', {
+                    class: 'fork-btn', type: 'button', text: 'Apply all to library…',
+                    title: 'Update every file that still credits an artist under a name one of your rules replaces',
+                    onclick: () => openApplyAll('artist', load),
+                }),
             ]),
             el('table', { class: 'fork-table' }, [
                 el('thead', {}, el('tr', {}, ['Source', 'Original', 'Use instead', ''].map((t) => el('th', { text: t })))),
@@ -622,21 +643,27 @@
         ]);
     }
 
-    const renameCheck = (opts, onChange) => el('label', { class: 'fork-check' }, [
+    const renameCheck = (opts, onChange, artist) => el('label', { class: 'fork-check' }, [
         el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.rename = e.target.checked; onChange(); } }),
-        el('span', {}, ['Also rename the files / album folder', el('small', {
-            text: 'Off: only the tag changes and files keep their current names.',
+        el('span', {}, [artist ? 'Also rename folders and files that carry the old name' : 'Also rename the files / album folder', el('small', {
+            text: artist
+                ? 'Moves albums into the artist’s new folder, merging with it if it already exists. Off: only the tags change.'
+                : 'Off: only the tag changes and files keep their current names.',
         })]),
     ]);
+
+    // translations and artist rules share the two apply dialogs
+    const applyUrl = (kind) => (kind === 'artist' ? '/artist-names/apply' : '/translations/apply');
 
     function openApply(kind, original, onDone) {
         const opts = { rename: true, folder: '' };
         const body = el('div', { class: 'fork-pop-body' });
         const status = el('span', { class: 'fork-help', style: 'flex:1' });
         const go = el('button', { class: 'fork-btn primary', text: 'Apply', disabled: true });
-        const layer = popup(`Apply translation: ${original}`, [
+        const isArtist = kind === 'artist';
+        const layer = popup(`${isArtist ? 'Apply artist rule' : 'Apply translation'}: ${original}`, [
             folderRow(opts, () => preview()),
-            renameCheck(opts, () => preview()),
+            renameCheck(opts, () => preview(), isArtist),
             body,
             el('div', { class: 'fork-foot', style: 'padding:12px 0 0;border:0' }, [
                 status,
@@ -651,11 +678,12 @@
             body.replaceChildren(el('div', { class: 'fork-empty', text: opts.folder ? 'Checking the folder…' : 'Checking your library…' }));
             let data;
             try {
-                data = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, folder: opts.folder, dry_run: true });
+                data = await api(applyUrl(kind), 'POST', { kind, original, rename: opts.rename, folder: opts.folder, dry_run: true });
             } catch (err) { body.replaceChildren(el('div', { class: 'fork-empty', text: err.message })); return; }
             if (!data.files.length) {
                 body.replaceChildren(el('div', { class: 'fork-empty', text:
                     `No files need changing: ${data.checked} checked, all already read “${data.display}” or are not this ${kind}.`
+                    + (isArtist && !opts.folder ? ' Tracks where this artist is only a featured artist are found by choosing their folder.' : '')
                     + (data.unreachable ? ` ${data.unreachable} could not be found on disk.` : '')
                     + (opts.folder ? '' : ' If the files are not in SoulSync’s library yet, choose their folder above.') }));
                 return;
@@ -669,7 +697,8 @@
             body.replaceChildren(
                 ...folders,
                 el('table', { class: 'fork-table' }, [
-                    el('thead', {}, el('tr', {}, ['File', kind === 'album' ? 'Album tag' : 'Title tag', opts.rename && kind === 'title' ? 'New file name' : ''].map((t) => el('th', { text: t })))),
+                    el('thead', {}, el('tr', {}, ['File', isArtist ? 'Artist tag' : kind === 'album' ? 'Album tag' : 'Title tag',
+                        opts.rename && isArtist ? 'New location' : opts.rename && kind === 'title' ? 'New file name' : ''].map((t) => el('th', { text: t })))),
                     el('tbody', {}, rows),
                 ]),
             );
@@ -682,7 +711,7 @@
             go.disabled = true;
             status.textContent = 'Applying…';
             try {
-                const done = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, folder: opts.folder });
+                const done = await api(applyUrl(kind), 'POST', { kind, original, rename: opts.rename, folder: opts.folder });
                 if (done.errors.length) {
                     toast(`Updated ${done.written} file(s); ${done.errors.length} problem(s)`, 'error');
                     status.textContent = done.errors.slice(0, 3).join(' · ');
@@ -700,6 +729,7 @@
      *  this dialog previews first, then applies, polling for progress. */
     function openApplyAll(kind, onDone) {
         const opts = { rename: true, folder: '' };
+        const isArtist = kind === 'artist';
         const scope = kind === 'album' ? 'album' : kind === 'title' ? 'title' : '';
         const body = el('div', { class: 'fork-pop-body' });
         const status = el('span', { class: 'fork-help', style: 'flex:1' });
@@ -707,9 +737,9 @@
         const go = el('button', { class: 'fork-btn primary', text: 'Apply all', disabled: true });
         let closed = false;
         let previewed = false;
-        const layer = popup(`Apply all ${scope ? scope + ' ' : ''}translations to the library`, [
+        const layer = popup(isArtist ? 'Apply all artist rules to the library' : `Apply all ${scope ? scope + ' ' : ''}translations to the library`, [
             folderRow(opts, () => invalidate()),
-            renameCheck(opts, () => invalidate()),
+            renameCheck(opts, () => invalidate(), isArtist),
             body,
             el('div', { class: 'fork-foot', style: 'padding:12px 0 0;border:0' }, [
                 status,
@@ -718,7 +748,9 @@
             ]),
         ], true);
         const intro = () => body.replaceChildren(el('div', { class: 'fork-empty', text:
-            'Every saved translation is compared with the files that carry that album or title, and files that still show an older translation are updated. '
+            (isArtist
+                ? 'Every rule is compared with the files that credit that artist, and files that still show the old name are updated. '
+                : 'Every saved translation is compared with the files that carry that album or title, and files that still show an older translation are updated. ')
             + 'Run Preview to see what would change. On a large library this can take a few minutes.' }));
         function invalidate() { previewed = false; go.disabled = true; status.textContent = ''; intro(); }
         intro();
@@ -728,7 +760,7 @@
             status.textContent = dryRun ? 'Checking…' : 'Applying…';
             let job;
             try {
-                const started = (await api('/translations/apply-all', 'POST', { kind: scope, rename: opts.rename, folder: opts.folder, dry_run: dryRun })).job;
+                const started = (await api(isArtist ? '/artist-names/apply-all' : '/translations/apply-all', 'POST', { kind: scope, rename: opts.rename, folder: opts.folder, dry_run: dryRun })).job;
                 // Poll until THIS run finishes. The URL is unique per poll and the
                 // job id is checked: the app de-duplicates identical GETs, which
                 // otherwise hands back the previous run's (preview) result.
@@ -758,12 +790,12 @@
                 el('div', { class: 'fork-facts' }, [
                     ['Names checked', result.total], ['Names with changes', result.names_changed],
                     [`Files ${verb}`, dryRun ? result.files : result.written],
-                    [dryRun ? 'Folders to rename' : 'Renamed', dryRun ? result.folders : result.renamed],
+                    [dryRun ? (isArtist ? 'Files to move' : 'Folders to rename') : (isArtist ? 'Moved' : 'Renamed'), dryRun ? result.folders : result.renamed],
                 ].map(([label, value]) => el('div', { class: 'fork-fact' }, [el('span', { text: label }), el('strong', { text: String(value) })]))),
                 rows.length ? el('table', { class: 'fork-table' }, [
                     el('thead', {}, el('tr', {}, ['', 'File', 'Tag'].map((t) => el('th', { text: t })))),
                     el('tbody', {}, rows),
-                ]) : el('div', { class: 'fork-empty', text: 'Everything already matches the saved translations.' }),
+                ]) : el('div', { class: 'fork-empty', text: isArtist ? 'Everything already matches your artist rules.' : 'Everything already matches the saved translations.' }),
                 more > 0 ? el('div', { class: 'fork-help', text: `…and ${more} more file${more === 1 ? '' : 's'}.` }) : null,
                 result.errors.length ? el('div', { class: 'fork-help', style: 'color:#ff8f8f', text: result.errors.slice(0, 5).join(' · ') }) : null,
             );
