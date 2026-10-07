@@ -352,9 +352,11 @@ def find_merges(db: Any, threshold: float = 0.85, tolerance: float = 10.0,
                     continue
                 out.append({
                     "single": {"album_id": single["id"], "title": single["title"]},
-                    "album": {"album_id": album["id"], "title": album["title"], "artist": album["artist"],
-                              "owned_tracks": len(album["tracks"]),
-                              "expected_tracks": len(listings[str(album["id"])])},
+                    # "album" is the name the findings views group and label by
+                    "album": album["title"],
+                    "target": {"album_id": album["id"], "title": album["title"], "artist": album["artist"],
+                               "owned_tracks": len(album["tracks"]),
+                               "expected_tracks": len(listings[str(album["id"])])},
                     "tracks": placed,
                     "artist": album["artist"],
                     "artist_id": album["artist_id"],
@@ -371,7 +373,7 @@ def find_merges(db: Any, threshold: float = 0.85, tolerance: float = 10.0,
 
 
 def finding_text(details: Dict[str, Any]) -> Tuple[str, str]:
-    single, album, tracks = details["single"], details["album"], details["tracks"]
+    single, album, tracks = details["single"], details["target"], details["tracks"]
     title = f'Merge single into album: "{single["title"]}" → "{album["title"]}" by {details.get("artist") or ""}'
     places = ", ".join(f'"{t["title"]}" as track {t["track_number"]}' for t in tracks[:4])
     return title, (f'"{album["title"]}" lists {"this song" if len(tracks) == 1 else "these songs"} but holds '
@@ -440,7 +442,7 @@ def merge(db: Any, details: Dict[str, Any]) -> Dict[str, Any]:
     from core.tag_writer import write_tags_to_file
 
     items = [t for t in (details.get("tracks") or []) if isinstance(t, dict)]
-    wanted = [(details.get(key) or {}).get("album_id") for key in ("album", "single")]
+    wanted = [(details.get(key) or {}).get("album_id") for key in ("target", "single")]
     albums = {key: _on_disk(value) for key, value in _load(db, [w for w in wanted if w is not None]).items()}
     album, single = albums.get(str(wanted[0])), albums.get(str(wanted[1]))
     if not items or album is None or not album["tracks"]:

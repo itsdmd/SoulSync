@@ -133,7 +133,7 @@ def test_a_single_an_album_is_missing_is_found_and_merged(lib):
     merges = single_merge.find_merges(lib)
     assert len(merges) == 1
     details = merges[0]
-    assert details["album"]["title"] == "Be Not Afraid" and details["single"]["title"] == "With Eyes to See"
+    assert details["target"]["title"] == "Be Not Afraid" and details["album"] == "Be Not Afraid" and details["single"]["title"] == "With Eyes to See"
     assert [(t["track_id"], t["track_number"], t["listed_as"]) for t in details["tracks"]] == [
         (single, 2, "With Eyes to See")]
     title, description = single_merge.finding_text(details)
@@ -224,7 +224,7 @@ def test_the_tools_report_or_keep_accordingly(lib, with_instrumental):
         del LISTING["Longplay"]
     kinds = sorted(f["finding_type"] for f in dedup.findings)
     merge = next(f for f in dedup.findings if f["finding_type"] == "fork_single_into_album")
-    assert merge["details"]["album"]["title"] == "Longplay" and merge["entity_type"] == "album"
+    assert merge["details"]["target"]["title"] == "Longplay" and merge["entity_type"] == "album"
     if with_instrumental:
         assert kinds == ["fork_single_into_album"] and dupes.findings == []
     else:
