@@ -191,6 +191,8 @@ export interface AdlGroupProps {
    * asked for the whole batch).
    */
   bucketed: boolean;
+  /** fork: a search is active — a finished batch opens to show its matches. */
+  searching?: boolean;
   filtered: boolean;
   opacity: number;
   samples: RateSample[];
@@ -216,6 +218,7 @@ export function AdlGroup({
   rows,
   allBatchRows,
   bucketed,
+  searching = false,
   filtered,
   opacity,
   samples,
@@ -228,7 +231,7 @@ export function AdlGroup({
 }: AdlGroupProps) {
   const terminal = isTerminalPhase(batch.phase);
   const [openOverride, setOpenOverride] = useState<boolean | null>(null);
-  const open = openOverride ?? !terminal;
+  const open = openOverride ?? (searching || !terminal);
   /** Which folded buckets ('queued' / 'done') the user has expanded. */
   const [openBuckets, setOpenBuckets] = useState<ReadonlySet<string>>(new Set());
   const toggleBucket = (key: string) =>
@@ -706,6 +709,8 @@ export interface AdlGroupedListProps {
   filterBatchId: string | null;
   /** True when a status chip other than All is active. */
   statusFiltered: boolean;
+  /** fork: a search query is active — show matching rows unfolded. */
+  searching?: boolean;
   batchOpacity: (batchId: string, phase: string) => number;
   samplesFor: (batchId: string) => RateSample[];
   onFilterBatch: (batchId: string) => void;
@@ -730,6 +735,7 @@ export function AdlGroupedList({
   history,
   filterBatchId,
   statusFiltered,
+  searching = false,
   batchOpacity,
   samplesFor,
   onFilterBatch,
@@ -767,7 +773,8 @@ export function AdlGroupedList({
           batch={batch}
           rows={rows.filter((dl) => dl.batch_id === batch.batch_id)}
           allBatchRows={allRows.filter((dl) => dl.batch_id === batch.batch_id)}
-          bucketed={!statusFiltered && !filterBatchId}
+          bucketed={!statusFiltered && !filterBatchId && !searching}
+          searching={searching}
           filtered={filterBatchId === batch.batch_id}
           opacity={batchOpacity(batch.batch_id, batch.phase)}
           samples={samplesFor(batch.batch_id)}

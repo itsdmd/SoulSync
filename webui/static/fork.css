@@ -1,0 +1,151 @@
+/* fork (itsdmd/SoulSync): style overrides and additions. Loaded after every
+   upstream stylesheet so these win without editing style.css. See FORK.md. */
+
+/* ── Downloads page: batches as full-width rows instead of a card grid ── */
+
+.adl-list.adl-group-grid {
+    display: flex;
+    flex-direction: column;
+    /* upstream's grid sets align-items: start, which in a column would shrink
+       every row to its content width */
+    align-items: stretch;
+    gap: 6px;
+}
+
+/* a row, not a card: flatter surface, tighter corners, no lift */
+.adl-group-grid .adl-group {
+    border-radius: 8px;
+    box-shadow: none;
+    background: rgba(255, 255, 255, 0.018);
+}
+
+.adl-group-grid .adl-group.active-glow {
+    box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12);
+}
+
+.adl-group-grid .adl-group-header {
+    padding: 8px 12px 8px 16px;
+    gap: 14px;
+}
+
+.adl-group-grid .adl-group-thumb {
+    width: 38px;
+    height: 38px;
+    border-radius: 6px;
+}
+
+/* name and phase share one line now that the row has the width for it */
+.adl-group-grid .adl-group-info {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+}
+
+.adl-group-grid .adl-group-name-line {
+    flex: 0 1 auto;
+    max-width: 55%;
+}
+
+.adl-group-grid .adl-group-phase {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-top: 0;
+}
+
+.adl-group-grid .adl-group-stats {
+    min-width: 150px;
+    text-align: right;
+}
+
+.adl-group-grid .adl-group-segbar {
+    height: 3px;
+}
+
+.adl-group-grid .adl-group-rows {
+    padding: 4px 8px 6px 16px;
+}
+
+@media (max-width: 900px) {
+    .adl-group-grid .adl-group-info {
+        display: block;
+    }
+
+    .adl-group-grid .adl-group-name-line {
+        max-width: none;
+    }
+
+    .adl-group-grid .adl-group-phase {
+        margin-top: 2px;
+    }
+}
+
+/* ── Downloads page: search box ── */
+
+.adl-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 0 10px;
+    height: 36px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.adl-search:focus-within {
+    border-color: rgba(var(--accent-rgb), 0.45);
+    background: rgba(255, 255, 255, 0.045);
+}
+
+.adl-search-icon {
+    flex-shrink: 0;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.adl-search-input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: #fff;
+    font-size: 0.85rem;
+}
+
+.adl-search-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+/* the browser's own clear button would duplicate ours */
+.adl-search-input::-webkit-search-cancel-button {
+    display: none;
+}
+
+.adl-search-count {
+    flex-shrink: 0;
+    font-size: 0.74rem;
+    color: rgba(255, 255, 255, 0.55);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.adl-search-clear {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.adl-search-clear:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+}

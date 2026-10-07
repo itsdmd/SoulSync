@@ -116,6 +116,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='dashboard-premier.css', v=static_v) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='profiles.css', v=static_v) }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='docs.css', v=static_v) }}">
+    <!-- fork (itsdmd/SoulSync): overrides, loaded last so they win. See FORK.md. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='fork.css', v=static_v) }}">
     <style id="soulsync-initial-appearance">
         :root {
             --accent-rgb: {{ initial_accent_rgb }};

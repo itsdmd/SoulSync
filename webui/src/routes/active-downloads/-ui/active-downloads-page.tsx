@@ -13,6 +13,7 @@ import {
   setDeletedRetention,
 } from '../-adl.api';
 import { batchSummary, isTerminalPhase } from '../-adl.batch';
+import { filterDownloads } from '../-adl.fork-search';
 import { formatSpeed, verificationHistoryId, unverifiedKey } from '../-adl.helpers';
 import { useAdlDownloads } from '../-adl.use-downloads';
 import { groupQuarantine, useAdlVerification } from '../-adl.use-verification';
@@ -51,6 +52,7 @@ import {
   AdlReviewExplainer,
   AdlUnverifiedRow,
 } from './adl-review';
+import { AdlSearchBar } from './adl-search';
 
 const toast = (message: string, type: string) => window.showToast?.(message, type);
 
@@ -58,6 +60,8 @@ export function ActiveDownloadsPage() {
   const navigate = useNavigate();
   const verification = useAdlVerification();
   const [cancelAllPending, setCancelAllPending] = useState(false);
+  /** fork: the search box above the batch list. */
+  const [search, setSearch] = useState('');
   /**
    * Checked unverified rows, by history id. Kept as raw checks and
    * intersected with what is on screen — a row that ages out of the list
@@ -288,6 +292,20 @@ export function ActiveDownloadsPage() {
   const summary = batchSummary(activeBatches, downloads.rateSamplesFor, Date.now());
 
   const showClients = state.filter === 'clients';
+  // fork: search narrows the Downloads view only; review and clients keep their own lists.
+  const searching = search.trim() !== '';
+  const found = useMemo(
+    () =>
+      filterDownloads(search, {
+        rows: visible,
+        allRows: state.downloads,
+        batches: downloads.visibleBatches,
+        history: state.batchHistory,
+      }),
+    [search, visible, state.downloads, downloads.visibleBatches, state.batchHistory],
+  );
+  const showSearch = !reviewing && !showClients;
+  const nothingFound = searching && found.batches.length === 0 && found.rows.length === 0;
   const visibleUnverifiedIds = useMemo(
     () =>
       reviewing
@@ -340,6 +358,14 @@ export function ActiveDownloadsPage() {
               batchId={state.filterBatchId}
               batchName={filteredBatch?.batch_name || 'Unknown batch'}
               onClear={() => downloads.toggleBatchFilter(state.filterBatchId as string)}
+            />
+          ) : null}
+
+          {showSearch ? (
+            <AdlSearchBar
+              value={search}
+              onChange={setSearch}
+              resultText={`${found.batches.length} ${found.batches.length === 1 ? 'batch' : 'batches'} · ${found.allRows.length} ${found.allRows.length === 1 ? 'track' : 'tracks'}`}
             />
           ) : null}
 
@@ -457,14 +483,21 @@ export function ActiveDownloadsPage() {
                 })
               )}
             </div>
+          ) : nothingFound ? (
+            <div className="adl-list" id="adl-list">
+              <div className="adl-empty" id="adl-empty">
+                No downloads match “{search.trim()}”.
+              </div>
+            </div>
           ) : (
             // Passed through, not wrapped in `void`: the row awaits it to keep
             // its cancel button locked until the request settles.
             <AdlGroupedList
-              rows={visible}
-              allRows={state.downloads}
-              batches={downloads.visibleBatches}
-              history={state.batchHistory}
+              rows={found.rows}
+              allRows={found.allRows}
+              batches={found.batches}
+              history={found.history}
+              searching={searching}
               filterBatchId={state.filterBatchId}
               statusFiltered={state.filter !== 'all'}
               batchOpacity={downloads.batchOpacity}
