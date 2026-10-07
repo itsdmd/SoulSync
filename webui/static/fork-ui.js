@@ -243,7 +243,7 @@
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
             textRow('Broader searches per track', 'search_terms.max_broad', '', {
                 type: 'number', min: '0', max: '12',
-                title: 'Tried last, widest last: artist + album, album alone, part of the album name, an alternative title alone. 0 turns them off.',
+                title: 'Tried last, widest last: artist + album, album alone, part of the album name, an alternative title alone. A CJK song is finally searched by its name alone, on top of this number. 0 turns all of them off.',
             }),
             el('div', { class: 'fork-row', style: 'align-items:flex-start' }, [
                 el('label', { text: 'Terms that are not translations', style: 'padding-top:7px' }),

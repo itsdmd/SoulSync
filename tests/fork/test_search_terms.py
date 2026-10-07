@@ -152,8 +152,23 @@ def test_queries_broaden_step_by_step(llm, fork_env):
         "A Symphonic Celebration",                            # 4. part of the album name
         "Music from the Studio Ghibli Films of Hayao Miyazaki",
         "Merry-Go-Round of Life",                             # 5. an alternative title alone
+        "人生のメリーゴーランド",                             # 6. the song's name alone (CJK only)
     ]
     assert llm.calls[0][1]["max_albums"] == 3
+
+
+def test_a_cjk_song_name_alone_is_the_last_resort_even_past_the_limit(llm, fork_env):
+    fork_env.set("fork.search_terms.max_broad", 1)
+    llm.replies = [{"titles": ["Ye Qu"], "albums": []}, {"titles": [], "albums": []}, {"titles": [], "albums": []}]
+    track = SimpleNamespace(name="夜曲", artists=["周杰倫"], album="十一月的蕭邦")
+    out = hooks.augment_search_queries(track, ["周杰倫 夜曲"])
+    assert out[-2:] == ["周杰倫 十一月的蕭邦", "夜曲"]
+    # one character says too little; and the whole ladder can be switched off
+    short = SimpleNamespace(name="愛", artists=["周杰倫"], album="十一月的蕭邦")
+    assert "愛" not in hooks.augment_search_queries(short, ["周杰倫 愛"])
+    fork_env.set("fork.search_terms.max_broad", 0)
+    other = SimpleNamespace(name="髮如雪", artists=["周杰倫"], album="十一月的蕭邦")
+    assert "髮如雪" not in hooks.augment_search_queries(other, ["周杰倫 髮如雪"])
 
 
 def test_broad_limit_and_a_single_named_after_its_track(llm, fork_env):
@@ -172,7 +187,8 @@ def test_broad_queries_work_from_the_cache_and_follow_the_setting(llm, fork_env)
     llm.replies = [{"titles": ["Thesis of a Cruel Angel"], "albums": ["Shin Seiki Evangelion"]}]
     track = SimpleNamespace(name="残酷な天使のテーゼ", artists=["高橋洋子"], album="Neon Genesis Evangelion")
     first = hooks.augment_search_queries(track, [])
-    assert first[-1] == "高橋洋子 Neon Genesis Evangelion" or first[-1] == "Yoko Takahashi Neon Genesis Evangelion"
+    assert first[-2] in ("高橋洋子 Neon Genesis Evangelion", "Yoko Takahashi Neon Genesis Evangelion")
+    assert first[-1] == "残酷な天使のテーゼ"
     fork_env.set("fork.search_terms.max_broad", 12)
     again = hooks.augment_search_queries(track, [])
     assert len(llm.calls) == 1

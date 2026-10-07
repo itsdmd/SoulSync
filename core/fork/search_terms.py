@@ -22,6 +22,7 @@ something, so a later rung can only be reached by fewer constraints:
 4. part of the album name    "A Symphonic Celebration: Music from the Studio
                              Ghibli Films…" -> "A Symphonic Celebration"
 5. title alone               an alternative title with no artist
+6. the song's name alone     CJK names only, always the very last query
 
 Whatever a broad query returns is still judged against the track by
 upstream's matcher, so a broad query can find more but cannot accept more.
@@ -216,7 +217,7 @@ def _real_album(album: str, title: str) -> str:
 
 def broaden(artist: str, title: str, album: str, variants: List[Dict[str, str]],
             albums: List[str], other_names: List[str], limit: int) -> List[str]:
-    """Rungs 2-5 of the ladder (see the module docstring), broadest last."""
+    """Rungs 2-6 of the ladder (see the module docstring), broadest last."""
     if limit <= 0:
         return []
     album = _real_album(album, title)
@@ -244,6 +245,11 @@ def broaden(artist: str, title: str, album: str, variants: List[Dict[str, str]],
                 seen.add(query.casefold())
                 out.append(query)
                 taken += 1
+    # 6. the song's own name alone, CJK only: such a name is rarely shared by
+    # other songs, and uploads often carry it with the artist romanized or
+    # missing. The last resort, so it is tried even when the limit is used up.
+    if contains_cjk(title) and _distinctive(title):
+        out.append(title)
     return out
 
 
