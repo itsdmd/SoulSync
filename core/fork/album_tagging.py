@@ -28,7 +28,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.fork import artist_format, config, ownership, tags
+from core.fork import artist_format, config, ownership, store, tags
 from utils.logging_config import get_logger
 
 logger = get_logger("fork.album_tagging")
@@ -293,29 +293,105 @@ def guess_folder(paths: List[str]) -> str:
     return counts.most_common(1)[0][0]
 
 
+def album_key(source: Any, album: Dict[str, Any], artist: Dict[str, Any]) -> Tuple[str, str, str]:
+    """``(source, album id, name key)`` a saved folder is stored under. An
+    album without an id is keyed by its name alone."""
+    name = _fold(str((album or {}).get("name") or "")).strip()
+    name_key = f"{_fold(_album_artist(album, artist)).strip()}|{name}" if name else ""
+    album_id = str((album or {}).get("id") or "").strip()
+    if not album_id:
+        return "", f"name:{name_key}" if name_key else "", name_key
+    return str(source or "").strip().lower(), album_id, name_key
+
+
+def saved_folder(source: Any, album: Dict[str, Any], artist: Dict[str, Any]) -> Dict[str, Any]:
+    """The folder picked for this album: ``{"folder", "missing"}``. ``missing``
+    is a saved folder that is no longer there (it is then not used)."""
+    src, album_id, name_key = album_key(source, album, artist)
+    if not album_id:
+        return {"folder": "", "missing": ""}
+    try:
+        row = store.get_album_folder(src, album_id, name_key)
+    except Exception as exc:
+        logger.debug("saved album folder not read: %s", exc)
+        row = None
+    if not row:
+        return {"folder": "", "missing": ""}
+    try:
+        return {"folder": safe_dir(row["folder"]), "missing": ""}
+    except (ValueError, PermissionError, FileNotFoundError):
+        return {"folder": "", "missing": row["folder"]}
+
+
+def save_folder(source: Any, album: Dict[str, Any], artist: Dict[str, Any], folder: Any) -> str:
+    """Remember ``folder`` for this album; an empty folder forgets it."""
+    src, album_id, name_key = album_key(source, album, artist)
+    if not album_id:
+        raise ValueError("This album has no id or name to save a folder for")
+    if not str(folder or "").strip():
+        store.delete_album_folder(src, album_id, name_key)
+        return ""
+    real = safe_dir(folder)
+    store.save_album_folder(src, album_id, real, name_key=name_key,
+                            album_name=str((album or {}).get("name") or ""),
+                            artist_name=_album_artist(album, artist))
+    return real
+
+
+def _library_match(db: Any, album: Dict[str, Any], artist: Dict[str, Any], track: Dict[str, Any],
+                   server_source: Optional[str]) -> Any:
+    match = None
+    try:
+        match = ownership.find_by_external_id(db, track, server_source)
+    except Exception as exc:
+        logger.debug("external id check failed: %s", exc)
+    title = str(track.get("name") or "")
+    if match is None and title:
+        album_name = str((album or {}).get("name") or "")
+        for name in _artist_names(track) or [_album_artist(album, artist)]:
+            try:
+                found, confidence = db.check_track_exists(
+                    title, name, confidence_threshold=0.7, server_source=server_source, album=album_name)
+            except Exception as exc:
+                logger.debug("check_track_exists failed for %r: %s", title, exc)
+                continue
+            if found is not None and (confidence or 0) >= 0.7:
+                return found
+    return match
+
+
+def _folder_matches(folder: str, album: Dict[str, Any], artist: Dict[str, Any],
+                    tracks: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """``{track index: file}`` for the files of ``folder`` that are this album's tracks."""
+    files = scan_folder(folder)
+    assigned = match_files(files, tracks, proposals(album, artist, tracks, True, True))
+    return {m["track"]: files[f_idx] for f_idx, m in assigned.items()}
+
+
 def check_album(db: Any, album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[str, Any]],
-                server_source: Optional[str] = None) -> Dict[str, Any]:
-    """Which tracks of the release the library already has. Read-only."""
-    album_name = str((album or {}).get("name") or "")
+                server_source: Optional[str] = None, source: Any = "") -> Dict[str, Any]:
+    """Which tracks of the release the library already has. Read-only.
+
+    With a folder saved for the album, that folder is the answer to "where is
+    it": its files are matched to the tracks directly and nothing is guessed.
+    The library database is only asked about tracks the folder does not hold.
+    """
+    saved = saved_folder(source, album, artist)
+    in_folder: Dict[int, Dict[str, Any]] = {}
+    if saved["folder"]:
+        try:
+            in_folder = _folder_matches(saved["folder"], album, artist, tracks)
+        except Exception as exc:
+            logger.warning("Saved folder %s could not be read: %s", saved["folder"], exc)
     results, paths = [], []
     for index, track in enumerate(tracks):
-        title = str(track.get("name") or "")
-        match = None
-        try:
-            match = ownership.find_by_external_id(db, track, server_source)
-        except Exception as exc:
-            logger.debug("external id check failed: %s", exc)
-        if match is None and title:
-            for name in _artist_names(track) or [_album_artist(album, artist)]:
-                try:
-                    found, confidence = db.check_track_exists(
-                        title, name, confidence_threshold=0.7, server_source=server_source, album=album_name)
-                except Exception as exc:
-                    logger.debug("check_track_exists failed for %r: %s", title, exc)
-                    continue
-                if found is not None and (confidence or 0) >= 0.7:
-                    match = found
-                    break
+        file = in_folder.get(index)
+        if file is not None:
+            results.append({"index": index, "found": True,
+                            "library_title": file["current"].get("title") or None,
+                            "file": os.path.join(saved["folder"], file["rel"])})
+            continue
+        match = _library_match(db, album, artist, track, server_source)
         path = _resolve(getattr(match, "file_path", None)) if match is not None else None
         if path:
             paths.append(path)
@@ -325,8 +401,9 @@ def check_album(db: Any, album: Dict[str, Any], artist: Dict[str, Any], tracks: 
             "library_title": getattr(match, "title", None) if match is not None else None,
             "file": path,
         })
-    folder = guess_folder(paths)
+    folder = saved["folder"] or guess_folder(paths)
     return {"tracks": results, "folder": folder if folder and root_of(folder) else "",
+            "folder_saved": bool(saved["folder"]), "saved_missing": saved["missing"],
             "found": sum(1 for r in results if r["found"]), "total": len(results)}
 
 
@@ -786,5 +863,14 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
                         moved += 1
             except Exception as exc:
                 entry["rename_error"] = str(exc)
-    return {"results": results, "written": written, "moved": moved,
+    new_folder = ""
+    if moved:
+        # files left the folder: a folder saved for the album follows them
+        new_folder = guess_folder([r["moved_to"] for r in results if r.get("moved_to")])
+        try:
+            if new_folder and new_folder != real and not _count_audio(real):
+                store.move_album_folders(real, new_folder)
+        except Exception as exc:
+            logger.debug("Saved album folder not updated: %s", exc)
+    return {"results": results, "written": written, "moved": moved, "folder": new_folder or real,
             "failed": sum(1 for r in results if not r["ok"])}

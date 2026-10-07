@@ -330,7 +330,22 @@ def album_check():
         server = config_manager.get_active_media_server()
     except Exception:
         server = None
-    return jsonify(success=True, **album_tagging.check_album(get_database(), album, artist, tracks, server))
+    return jsonify(success=True, **album_tagging.check_album(
+        get_database(), album, artist, tracks, server, source=_body_.get("source")))
+
+
+@bp.route("/api/fork/album/folder", methods=["POST"])
+@admin_only
+def album_save_folder():
+    """Remember the folder picked for an album (an empty folder forgets it)."""
+    from core.fork import album_tagging
+
+    body, album, artist, _tracks = _album_payload()
+    try:
+        folder = album_tagging.save_folder(body.get("source"), album, artist, body.get("folder"))
+    except (ValueError, PermissionError, FileNotFoundError) as exc:
+        return _folder_error(exc)
+    return jsonify(success=True, folder=folder)
 
 
 @bp.route("/api/fork/album/browse", methods=["GET"])

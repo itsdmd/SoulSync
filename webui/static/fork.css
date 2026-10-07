@@ -191,6 +191,20 @@
     color: rgba(255, 255, 255, 0.5);
 }
 
+.fork-album-saved {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: rgb(var(--accent-light-rgb, var(--accent-rgb)));
+    background: rgba(var(--accent-rgb), 0.15);
+}
+
+.fork-album-bar [hidden] {
+    display: none;
+}
+
 .fork-album-bar .download-control-btn {
     flex-shrink: 0;
     padding: 6px 12px;

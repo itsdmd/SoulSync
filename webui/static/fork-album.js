@@ -129,7 +129,12 @@
             if (label) label.textContent = `${data.found} of ${data.total} in library`;
             const fill = document.getElementById(`analysis-progress-fill-${id}`);
             if (fill) fill.style.width = '100%';
-            if (!state.folderChosen) setFolder(state, data.folder || '');
+            // a folder saved for the album always wins; otherwise keep one that
+            // was picked but could not be saved over the library's guess
+            if (data.folder_saved || !state.folderChosen) setFolder(state, data.folder || '', !!data.folder_saved);
+            if (data.saved_missing && !state.folderChosen) {
+                state.pathEl.title = `The folder saved for this album is gone: ${data.saved_missing}`;
+            }
         } catch (err) {
             console.warn('[fork] album check failed:', err);
             if (!label) return;
@@ -146,18 +151,51 @@
 
     // ── 2. local files bar ───────────────────────────────────────────────
 
-    function setFolder(state, folder) {
+    function setFolder(state, folder, saved) {
         state.folder = folder;
+        state.saved = !!(saved && folder);
         state.pathEl.textContent = folder || 'No folder found for this album in your library';
         state.pathEl.title = folder;
         state.pathEl.classList.toggle('fork-album-none', !folder);
         state.tagBtn.disabled = !folder;
+        state.savedEl.hidden = !state.saved;
+        state.forgetBtn.hidden = !state.saved;
+    }
+
+    // Remember the picked folder for this album (an empty one forgets it), then
+    // check again so Found/Missing reflects what that folder holds.
+    async function saveFolder(state, folder) {
+        const process = getProcess(state.id);
+        if (!process) return;
+        const body = payload(process);
+        delete body.tracks;
+        try {
+            const data = await api('/folder', Object.assign(body, { folder }));
+            state.folderChosen = false;
+            setFolder(state, data.folder || '', true);
+        } catch (err) {
+            console.warn('[fork] album folder not saved:', err);
+            // still usable for this visit, just not remembered
+            state.folderChosen = !!folder;
+            setFolder(state, folder, false);
+            state.pathEl.title = `${folder}\nNot saved: ${(err && err.message) || 'unknown error'}`;
+        }
+        runCheck(state.id, state);
     }
 
     function addBar(id, modal) {
         const section = modal.querySelector('.download-tracks-section');
         if (!section || modal.querySelector('.fork-album-bar')) return null;
-        const state = { id, folder: '', folderChosen: false };
+        const state = { id, folder: '', folderChosen: false, saved: false };
+        state.savedEl = el('span', {
+            class: 'fork-album-saved', text: 'Saved', hidden: true,
+            title: 'You picked this folder for the album. It is used every time the album is opened.',
+        });
+        state.forgetBtn = el('button', {
+            class: 'download-control-btn secondary', type: 'button', text: 'Forget', hidden: true,
+            title: 'Stop using the saved folder and let SoulSync look for the album again',
+            onclick: () => saveFolder(state, ''),
+        });
         state.pathEl = el('span', { class: 'fork-album-path fork-album-none', text: 'Looking for this album in your library…' });
         state.tagBtn = el('button', {
             class: 'download-control-btn', type: 'button', text: 'Auto-tag…', disabled: true,
@@ -167,14 +205,13 @@
         const bar = el('div', { class: 'fork-album-bar' }, [
             el('span', { class: 'fork-album-label', text: 'Local files' }),
             state.pathEl,
+            state.savedEl,
             el('button', {
                 class: 'download-control-btn secondary', type: 'button', text: 'Change…',
-                title: 'Pick the folder that holds this album',
-                onclick: () => openBrowser(state.folder, (picked) => {
-                    state.folderChosen = true;
-                    setFolder(state, picked);
-                }),
+                title: 'Pick the folder that holds this album. It is remembered for this album.',
+                onclick: () => openBrowser(state.folder, (picked) => saveFolder(state, picked)),
             }),
+            state.forgetBtn,
             state.tagBtn,
         ]);
         section.parentNode.insertBefore(bar, section);

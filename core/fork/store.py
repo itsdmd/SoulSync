@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS fork_search_terms (
     model TEXT,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fork_album_folders (
+    source TEXT NOT NULL,
+    album_id TEXT NOT NULL,
+    name_key TEXT NOT NULL DEFAULT '',
+    folder TEXT NOT NULL,
+    album_name TEXT NOT NULL DEFAULT '',
+    artist_name TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (source, album_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fork_album_folders_name ON fork_album_folders (name_key);
 """
 
 _initialised: set = set()
@@ -265,3 +276,47 @@ def clear_search_terms() -> int:
     with connect() as conn:
         conn.execute("DELETE FROM fork_artist_aliases")
         return conn.execute("DELETE FROM fork_search_terms").rowcount
+
+
+# ── album folders ───────────────────────────────────────────────────────
+# The folder the user picked for an album in the album pop-up. Keyed by the
+# metadata source's album id; ``name_key`` (artist + album name) lets the same
+# album opened from another source find it too.
+
+def get_album_folder(source: str, album_id: str, name_key: str = "") -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = None
+        if album_id:
+            row = conn.execute("SELECT * FROM fork_album_folders WHERE source = ? AND album_id = ?",
+                               (source, album_id)).fetchone()
+        if row is None and name_key:
+            row = conn.execute(
+                "SELECT * FROM fork_album_folders WHERE name_key = ? ORDER BY updated_at DESC LIMIT 1",
+                (name_key,)).fetchone()
+    return dict(row) if row else None
+
+
+def save_album_folder(source: str, album_id: str, folder: str, *, name_key: str = "",
+                      album_name: str = "", artist_name: str = "") -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO fork_album_folders "
+            "(source, album_id, name_key, folder, album_name, artist_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (source, album_id, name_key, folder, album_name, artist_name, time.time()),
+        )
+
+
+def delete_album_folder(source: str, album_id: str, name_key: str = "") -> int:
+    """Forget the folder for this album: its own row and any row found by name."""
+    with connect() as conn:
+        removed = conn.execute("DELETE FROM fork_album_folders WHERE source = ? AND album_id = ?",
+                               (source, album_id)).rowcount
+        if name_key:
+            removed += conn.execute("DELETE FROM fork_album_folders WHERE name_key = ?", (name_key,)).rowcount
+    return removed
+
+
+def move_album_folders(old: str, new: str) -> int:
+    with connect() as conn:
+        return conn.execute("UPDATE fork_album_folders SET folder = ?, updated_at = ? WHERE folder = ?",
+                            (new, time.time(), old)).rowcount

@@ -400,3 +400,78 @@ def test_name_keys_recognise_the_same_name_across_forms():
     assert score_(keys("夜曲 (Live)"), keys("Nocturne (夜曲) (Live)")) == 1.0
     assert score_(keys("夜曲"), keys("髮如雪")) < 0.5
     assert score_(keys(""), keys("夜曲")) == 0.0
+
+
+class _EmptyLibrary:
+    """A library database that knows no track."""
+
+    def __init__(self):
+        self.asked = []
+
+    def check_track_exists(self, title, artist, **kwargs):
+        self.asked.append(title)
+        return None, 0.0
+
+
+def _album_on_disk(library, name="Chosen"):
+    folder = library / name
+    _flac(str(folder / "01 - Nocturne (夜曲).flac"), title="Nocturne (夜曲)", tracknumber=1)
+    _flac(str(folder / "02 - whatever.flac"), title="Hair Like Snow (髮如雪)", tracknumber=2)
+    return str(folder)
+
+
+def test_a_saved_folder_is_used_for_the_album_from_then_on(library, monkeypatch):
+    monkeypatch.setattr(album_tagging.ownership, "find_by_external_id", lambda *a, **k: None)
+    folder = _album_on_disk(library)
+    db = _EmptyLibrary()
+    before = album_tagging.check_album(db, ALBUM, ARTIST, TRACKS, source="spotify")
+    assert before["folder"] == "" and before["folder_saved"] is False and before["found"] == 0
+
+    assert album_tagging.save_folder("spotify", ALBUM, ARTIST, folder) == os.path.realpath(folder)
+    db.asked.clear()
+    after = album_tagging.check_album(db, ALBUM, ARTIST, TRACKS, source="spotify")
+    assert after["folder"] == os.path.realpath(folder) and after["folder_saved"] is True
+    assert [t["found"] for t in after["tracks"]] == [True, True, False]
+    assert after["tracks"][0]["file"].endswith("01 - Nocturne (夜曲).flac")
+    # the library is only asked about the track the folder does not hold
+    assert set(db.asked) == {"Duet"}
+
+
+def test_a_saved_folder_is_found_from_another_source_by_name_and_can_be_forgotten(library, monkeypatch):
+    monkeypatch.setattr(album_tagging.ownership, "find_by_external_id", lambda *a, **k: None)
+    folder = _album_on_disk(library)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    same_album_elsewhere = dict(ALBUM, id="deezer-77")
+    assert album_tagging.saved_folder("deezer", same_album_elsewhere, ARTIST)["folder"] == os.path.realpath(folder)
+    assert album_tagging.saved_folder("spotify", dict(ALBUM, id="x", name="Other"), ARTIST)["folder"] == ""
+
+    assert album_tagging.save_folder("deezer", same_album_elsewhere, ARTIST, "") == ""
+    assert album_tagging.saved_folder("spotify", ALBUM, ARTIST) == {"folder": "", "missing": ""}
+
+
+def test_a_saved_folder_that_is_gone_or_outside_the_library_is_not_used(library, tmp_path, monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(album_tagging.ownership, "find_by_external_id", lambda *a, **k: None)
+    with pytest.raises((ValueError, PermissionError, FileNotFoundError)):
+        album_tagging.save_folder("spotify", ALBUM, ARTIST, str(tmp_path / "elsewhere"))
+    folder = _album_on_disk(library)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    shutil.rmtree(folder)
+    result = album_tagging.check_album(_EmptyLibrary(), ALBUM, ARTIST, TRACKS, source="spotify")
+    assert result["folder"] == "" and result["folder_saved"] is False
+    assert result["saved_missing"] == os.path.realpath(folder)
+
+
+def test_a_saved_folder_follows_the_files_when_tagging_moves_them(library, monkeypatch):
+    folder = _album_on_disk(library)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
+    new_home = os.path.join(os.path.realpath(str(library)), "Jay Chou", "Album")
+    monkeypatch.setattr(album_tagging, "_template_path",
+                        lambda root, values, album, total, discs, ext: os.path.join(
+                            new_home, f"{values['track_number']}{ext}"))
+    rows = [{"rel": "01 - Nocturne (夜曲).flac", "track": 0, "tags": {"title": "Nocturne", "track_number": 1}},
+            {"rel": "02 - whatever.flac", "track": 1, "tags": {"title": "Hair Like Snow", "track_number": 2}}]
+    out = album_tagging.apply(folder, rows, ALBUM, ARTIST, TRACKS, source="spotify", rename=True)
+    assert out["moved"] == 2 and out["folder"] == new_home
+    assert album_tagging.saved_folder("spotify", ALBUM, ARTIST)["folder"] == new_home
