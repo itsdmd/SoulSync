@@ -330,7 +330,7 @@ def album_check():
         server = config_manager.get_active_media_server()
     except Exception:
         server = None
-    return jsonify(success=True, **album_tagging.check_album(
+    return jsonify(success=True, **album_tagging.analyse_album(
         get_database(), album, artist, tracks, server, source=_body_.get("source")))
 
 

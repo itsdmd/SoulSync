@@ -988,7 +988,7 @@ def check_artist_discography_completion(
     }
 
 
-# ── fork: a folder picked for an album counts towards its completion ────
+# ── fork: a card shows what the album pop-up's library analysis finds ────
 _upstream_check_album_completion = check_album_completion
 _upstream_check_single_completion = check_single_completion
 
@@ -997,11 +997,11 @@ def check_album_completion(db, album_data, artist_name, source_override=None, *a
     from core.fork import hooks
 
     result = _upstream_check_album_completion(db, album_data, artist_name, source_override, *args, **kwargs)
-    return hooks.completion_with_saved_folder(result, album_data, artist_name, source_override)
+    return hooks.completion_from_library_analysis(db, result, album_data, artist_name, source_override)
 
 
 def check_single_completion(db, single_data, artist_name, source_override=None, *args, **kwargs):  # fork
     from core.fork import hooks
 
     result = _upstream_check_single_completion(db, single_data, artist_name, source_override, *args, **kwargs)
-    return hooks.completion_with_saved_folder(result, single_data, artist_name, source_override)
+    return hooks.completion_from_library_analysis(db, result, single_data, artist_name, source_override)

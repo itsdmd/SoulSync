@@ -496,16 +496,103 @@ def test_discography_count_uses_the_saved_folder_and_never_lowers(library):
     assert album_tagging.completion_from_saved_folder(done, card, "周杰倫", "spotify") is done
 
 
-def test_completion_check_is_wrapped_and_counts_the_saved_folder(library, monkeypatch):
+class _Library:
+    """A library database that owns the titles it is given."""
+
+    def __init__(self, *titles):
+        self.titles, self.asked = set(titles), 0
+
+    def check_track_exists(self, title, artist, **kwargs):
+        self.asked += 1
+        return (type("Row", (), {"title": title, "file_path": None})(), 1.0) if title in self.titles else (None, 0.0)
+
+
+@pytest.fixture
+def analysis(library, monkeypatch):
+    """A release whose track list can be fetched, and a library with a tracks
+    table (what an analysis is remembered against)."""
+    monkeypatch.setattr(album_tagging.ownership, "find_by_external_id", lambda *a, **k: None)
+    fetched = []
+
+    def tracks(album, artist_name, source):
+        fetched.append(album["id"])
+        return {"success": True, "album": dict(ALBUM), "tracks": TRACKS}
+
+    monkeypatch.setattr(album_tagging, "_album_tracks", tracks)
+    with store.connect() as conn:
+        conn.execute("CREATE TABLE tracks (id INTEGER PRIMARY KEY, title TEXT)")
+    album_tagging._fingerprint_cache.update(at=0.0, value="")
+    yield fetched
+    album_tagging._fingerprint_cache.update(at=0.0, value="")
+
+
+CARD = {"id": "al1", "name": ALBUM["name"], "total_tracks": 12}
+UPSTREAM = {"id": "al1", "status": "completed", "owned_tracks": 12, "expected_tracks": 12,
+            "completion_percentage": 100, "found_in_db": True, "formats": ["FLAC"]}
+
+
+def test_a_card_shows_what_the_track_by_track_analysis_finds(analysis):
+    # the album-level guess says "complete"; one of the three tracks is owned
+    out = album_tagging.completion_from_analysis(_Library("夜曲"), UPSTREAM, CARD, "周杰倫", "spotify")
+    assert (out["owned_tracks"], out["expected_tracks"], out["status"]) == (1, 3, "partial")
+    assert out["completion_percentage"] == 33.3 and out["formats"] == ["FLAC"] and out["analysed"] is True
+    none = album_tagging.completion_from_analysis(_Library(), UPSTREAM, dict(CARD, id="al2"), "周杰倫", "spotify")
+    assert (none["owned_tracks"], none["status"], none["found_in_db"]) == (0, "missing", False)
+    every = _Library("夜曲", "髮如雪", "Duet")
+    assert album_tagging.completion_from_analysis(every, UPSTREAM, dict(CARD, id="al3"), "周杰倫", "spotify")["status"] == "completed"
+
+
+def test_an_analysis_is_reused_until_the_library_or_the_saved_folder_changes(analysis):
+    db = _Library("夜曲")
+    album_tagging.completion_from_analysis(db, UPSTREAM, CARD, "周杰倫", "spotify")
+    asked = db.asked
+    again = album_tagging.completion_from_analysis(db, UPSTREAM, CARD, "周杰倫", "spotify")
+    assert again["owned_tracks"] == 1 and db.asked == asked and analysis == ["al1"]
+
+    with store.connect() as conn:                       # a track arrives in the library
+        conn.execute("INSERT INTO tracks (title) VALUES ('x')")
+    album_tagging._fingerprint_cache.update(at=0.0, value="")
+    db.titles.add("髮如雪")
+    assert album_tagging.completion_from_analysis(db, UPSTREAM, CARD, "周杰倫", "spotify")["owned_tracks"] == 2
+
+
+def test_a_card_counts_the_saved_folder_through_the_same_analysis(analysis, library):
+    db = _Library("Duet")
+    assert album_tagging.completion_from_analysis(db, UPSTREAM, CARD, "周杰倫", "spotify")["owned_tracks"] == 1
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, _album_on_disk(library))
+    out = album_tagging.completion_from_analysis(db, UPSTREAM, CARD, "周杰倫", "spotify")
+    assert (out["owned_tracks"], out["status"]) == (3, "completed")
+
+
+def test_the_pop_up_check_is_what_the_card_shows_next(analysis):
+    db = _Library("夜曲", "髮如雪")
+    shown = album_tagging.analyse_album(db, ALBUM, ARTIST, TRACKS, source="spotify")
+    assert shown["found"] == 2
+    out = album_tagging.completion_from_analysis(_Library(), UPSTREAM, CARD, "周杰倫", "spotify")
+    assert out["owned_tracks"] == 2 and analysis == []      # remembered, nothing fetched or asked again
+
+
+def test_without_a_track_list_the_album_level_answer_stands(analysis, library, monkeypatch):
+    monkeypatch.setattr(album_tagging, "_album_tracks", lambda *a: {"success": False})
+    assert album_tagging.completion_from_analysis(_Library(), UPSTREAM, CARD, "周杰倫", "spotify") is UPSTREAM
+    # ... still counting a saved folder
+    missing = dict(UPSTREAM, status="missing", owned_tracks=0, expected_tracks=3)
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, _album_on_disk(library))
+    assert album_tagging.completion_from_analysis(_Library(), missing, CARD, "周杰倫", "spotify")["owned_tracks"] == 2
+
+
+def test_completion_check_is_wrapped_and_shows_the_analysis(analysis, monkeypatch):
     from core.metadata import completion
 
-    folder = _album_on_disk(library)
-    album_tagging.save_folder("spotify", ALBUM, ARTIST, folder)
-    monkeypatch.setattr(completion, "_upstream_check_album_completion", lambda db, album, artist, source=None, *a, **k: {
-        "id": album["id"], "status": "missing", "owned_tracks": 0, "expected_tracks": 3, "completion_percentage": 0})
-    out = completion.check_album_completion(None, {"id": "al1", "name": ALBUM["name"], "total_tracks": 3}, "周杰倫",
-                                            source_override="spotify", candidate_albums=[])
-    assert out["owned_tracks"] == 2 and out["status"] == "partial"
+    monkeypatch.setattr(completion, "_upstream_check_album_completion",
+                        lambda db, album, artist, source=None, *a, **k: dict(UPSTREAM))
+    out = completion.check_album_completion(_Library("夜曲"), CARD, "周杰倫", source_override="spotify",
+                                            candidate_albums=[])
+    assert (out["owned_tracks"], out["expected_tracks"], out["status"]) == (1, 3, "partial")
+    monkeypatch.setattr(completion, "_upstream_check_single_completion",
+                        lambda db, album, artist, source=None, *a, **k: dict(UPSTREAM))
+    out = completion.check_single_completion(_Library(), dict(CARD, id="s1"), "周杰倫", source_override="spotify")
+    assert out["status"] == "missing"
 
 
 def _apply_fields(library, fields, name):

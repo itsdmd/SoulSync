@@ -193,17 +193,17 @@ def owned_by_external_id(db: Any, track: Any, server_source: Optional[str] = Non
         return None
 
 
-def completion_with_saved_folder(result: Any, album: Any, artist_name: Any, source: Any = None) -> Any:
-    """Discography card: count the folder the user picked for the album."""
+def completion_from_library_analysis(db: Any, result: Any, album: Any, artist_name: Any, source: Any = None) -> Any:
+    """Discography card: the status the album pop-up's library analysis gives."""
     if not _active():
         return result
     try:
         from core.fork import album_tagging
 
-        return album_tagging.completion_from_saved_folder(
-            result, album if isinstance(album, dict) else {}, str(artist_name or ""), source or "")
+        return album_tagging.completion_from_analysis(
+            db, result, album if isinstance(album, dict) else {}, str(artist_name or ""), source or "")
     except Exception as exc:
-        logger.debug("completion_with_saved_folder failed: %s", exc)
+        logger.debug("completion_from_library_analysis failed: %s", exc)
         return result
 
 

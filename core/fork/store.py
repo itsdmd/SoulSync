@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS fork_album_folders (
     PRIMARY KEY (source, album_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fork_album_folders_name ON fork_album_folders (name_key);
+CREATE TABLE IF NOT EXISTS fork_album_checks (
+    source TEXT NOT NULL,
+    album_id TEXT NOT NULL,
+    found INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL DEFAULT '',
+    checked_at REAL NOT NULL,
+    PRIMARY KEY (source, album_id)
+);
 """
 
 _initialised: set = set()
@@ -325,3 +334,31 @@ def move_album_folders(old: str, new: str) -> int:
     with connect() as conn:
         return conn.execute("UPDATE fork_album_folders SET folder = ?, updated_at = ? WHERE folder = ?",
                             (new, time.time(), old)).rowcount
+
+
+# ── album checks ────────────────────────────────────────────────────────
+# The last library analysis of an album (how many of its tracks are owned),
+# with a fingerprint of what it was computed from so it is only reused while
+# that is unchanged.
+
+def get_album_check(source: str, album_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM fork_album_checks WHERE source = ? AND album_id = ?",
+                           (source, album_id)).fetchone()
+    return dict(row) if row else None
+
+
+def save_album_check(source: str, album_id: str, found: int, total: int, fingerprint: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO fork_album_checks (source, album_id, found, total, fingerprint, checked_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (source, album_id, int(found), int(total), fingerprint, time.time()),
+        )
+
+
+def library_fingerprint() -> str:
+    """Changes whenever tracks are added to or removed from the library."""
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM tracks").fetchone()
+    return f"{row[0]}:{row[1]}"

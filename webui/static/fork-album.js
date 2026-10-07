@@ -127,6 +127,7 @@
                 if (typeof window.updateTrackSelectionCount === 'function') window.updateTrackSelectionCount(id);
             } catch (err) { console.warn('[fork] selection count not refreshed:', err); }
             if (label) label.textContent = `${data.found} of ${data.total} in library`;
+            updateCard(process.album, data);
             const fill = document.getElementById(`analysis-progress-fill-${id}`);
             if (fill) fill.style.width = '100%';
             // a folder saved for the album always wins; otherwise keep one that
@@ -147,6 +148,39 @@
                 }),
             );
         }
+    }
+
+    // The album's card in the discography shows this same analysis; bring it
+    // up to date now instead of on the next visit to the artist.
+    function updateCard(album, data) {
+        const albumId = album && album.id;
+        if (!albumId || !data.total || typeof window.updateAlbumCompletionOverlay !== 'function') return;
+        const completion = {
+            id: albumId,
+            name: album.name || '',
+            status: data.found >= data.total ? 'completed' : data.found ? 'partial' : 'missing',
+            owned_tracks: data.found,
+            expected_tracks: data.total,
+            completion_percentage: Math.round((data.found / data.total) * 1000) / 10,
+            confidence: data.found ? 1 : 0,
+        };
+        try {
+            for (const [containerId, type] of [['album-cards-container', 'albums'], ['singles-cards-container', 'singles']]) {
+                const container = document.getElementById(containerId);
+                if (!container) continue;
+                const cards = container.querySelectorAll('[data-album-id]');
+                if (![...cards].some((card) => card.dataset.albumId === String(albumId))) continue;
+                window.updateAlbumCompletionOverlay(completion, type);
+                // the page keeps what it was told per artist and paints from it again
+                // eslint-disable-next-line no-undef
+                const cache = typeof artistsPageState !== 'undefined' ? artistsPageState.cache.completionData : null;
+                for (const entry of Object.values(cache || {})) {
+                    for (const item of (entry && entry[type]) || []) {
+                        if (String(item.id) === String(albumId)) Object.assign(item, completion);
+                    }
+                }
+            }
+        } catch (err) { console.warn('[fork] album card not refreshed:', err); }
     }
 
     // ── 2. local files bar ───────────────────────────────────────────────

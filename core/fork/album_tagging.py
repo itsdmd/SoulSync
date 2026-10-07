@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import unicodedata
 from collections import Counter
 from difflib import SequenceMatcher
@@ -426,7 +427,9 @@ def _folder_matches(folder: str, album: Dict[str, Any], artist: Dict[str, Any],
                     tracks: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
     """``{track index: file}`` for the files of ``folder`` that are this album's tracks."""
     files = scan_folder(folder)
-    assigned = match_files(files, tracks, proposals(album, artist, tracks, True, True))
+    # files are paired by title; splitting artist credits (which may ask
+    # MusicBrainz) would only slow the check down
+    assigned = match_files(files, tracks, proposals(album, artist, tracks, True, False))
     return {m["track"]: files[f_idx] for f_idx, m in assigned.items()}
 
 
@@ -467,6 +470,135 @@ def check_album(db: Any, album: Dict[str, Any], artist: Dict[str, Any], tracks: 
     return {"tracks": results, "folder": folder if folder and root_of(folder) else "",
             "folder_saved": bool(saved["folder"]), "saved_missing": saved["missing"],
             "found": sum(1 for r in results if r["found"]), "total": len(results)}
+
+
+# ── the discography card shows the same analysis ────────────────────────
+
+_fingerprint_cache: Dict[str, Any] = {"at": 0.0, "value": ""}
+
+
+def _library_fingerprint() -> str:
+    """``store.library_fingerprint`` read at most once every few seconds (a
+    discography asks for every card in a row). "" when it cannot be read."""
+    now = time.time()
+    if now - _fingerprint_cache["at"] > 5 or not _fingerprint_cache["value"]:
+        try:
+            _fingerprint_cache["value"] = store.library_fingerprint()
+        except Exception as exc:
+            logger.debug("library fingerprint not read: %s", exc)
+            _fingerprint_cache["value"] = ""
+        _fingerprint_cache["at"] = now
+    return _fingerprint_cache["value"]
+
+
+def _check_fingerprint(folder: str) -> str:
+    """What an analysis depends on: the library's tracks and the saved folder."""
+    library = _library_fingerprint()
+    if not library:
+        return ""
+    if not folder:
+        return library
+    try:
+        return f"{library}|{folder}|{count_audio_deep(folder)}|{int(os.path.getmtime(folder))}"
+    except OSError:
+        return ""
+
+
+def _check_key(source: Any, album: Dict[str, Any]) -> Tuple[str, str]:
+    """``(source, album id)`` an analysis is stored under. A card that names no
+    source is one of the primary source."""
+    album_id = str((album or {}).get("id") or "").strip()
+    src = str(source or "").strip().lower()
+    if album_id and not src:
+        try:
+            from core.metadata.registry import get_primary_source
+
+            src = str(get_primary_source() or "").strip().lower()
+        except Exception:
+            src = ""
+    return src, album_id
+
+
+def analyse_album(db: Any, album: Dict[str, Any], artist: Dict[str, Any], tracks: List[Dict[str, Any]],
+                  server_source: Optional[str] = None, source: Any = "") -> Dict[str, Any]:
+    """``check_album``, remembered so the album's discography card can show it."""
+    result = check_album(db, album, artist, tracks, server_source, source=source)
+    src, album_id = _check_key(source, album)
+    if album_id:
+        try:
+            fingerprint = _check_fingerprint(result["folder"] if result["folder_saved"] else "")
+            store.save_album_check(src, album_id, result["found"], result["total"], fingerprint)
+        except Exception as exc:
+            logger.debug("album check not saved: %s", exc)
+    return result
+
+
+def _album_tracks(album: Dict[str, Any], artist_name: str, source: Any) -> Dict[str, Any]:
+    """The release's track list, fetched the way the album pop-up does."""
+    from core.metadata.album_tracks import get_artist_album_tracks
+
+    return get_artist_album_tracks(str(album.get("id") or ""), artist_name=artist_name,
+                                   album_name=str(album.get("name") or ""),
+                                   source_override=str(source or "").strip().lower() or None) or {}
+
+
+def _analysed_counts(db: Any, album: Dict[str, Any], artist_name: str, source: Any) -> Optional[Tuple[int, int]]:
+    """``(found, total)`` from the last analysis if nothing it depends on has
+    changed, else from a new one. None when the track list is not available."""
+    src, album_id = _check_key(source, album)
+    if not album_id:
+        return None
+    artist = {"name": artist_name}
+    fingerprint = _check_fingerprint(saved_folder(source, album, artist)["folder"])
+    if fingerprint:
+        row = store.get_album_check(src, album_id)
+        if row and row["fingerprint"] == fingerprint and row["total"] > 0:
+            return int(row["found"]), int(row["total"])
+    payload = _album_tracks(album, artist_name, source)
+    tracks = payload.get("tracks") or []
+    if not payload.get("success") or not tracks:
+        return None
+    try:
+        from core.settings import config_manager
+
+        server = config_manager.get_active_media_server()
+    except Exception:
+        server = None
+    # the card's own id and name stay: the saved folder is filed under them
+    full = dict(payload.get("album") or {})
+    full.update({k: v for k, v in album.items() if k in ("id", "name") and v})
+    result = analyse_album(db, full, artist, tracks, server, source=source)
+    return result["found"], result["total"]
+
+
+def completion_from_analysis(db: Any, result: Dict[str, Any], album: Dict[str, Any], artist_name: str,
+                             source: Any = "") -> Dict[str, Any]:
+    """A discography card's status from the album pop-up's library analysis:
+    each track of the release looked up in the library (and in the folder
+    saved for the album). Falls back to the library's album-level answer, with
+    the saved folder counted, when the track list cannot be had."""
+    if not isinstance(result, dict):
+        return result
+    counts = None
+    try:
+        counts = _analysed_counts(db, album or {}, artist_name, source)
+    except Exception as exc:
+        logger.debug("album analysis failed for %r: %s", (album or {}).get("name"), exc)
+    if not counts:
+        return completion_from_saved_folder(result, album, artist_name, source)
+    found, total = counts
+    out = dict(result)
+    out.update({
+        "owned_tracks": found,
+        "expected_tracks": total,
+        "completion_percentage": round(found / total * 100, 1),
+        "status": "completed" if found >= total else "partial" if found else "missing",
+        "found_in_db": found > 0,
+        "confidence": 1.0 if found else 0.0,
+        "analysed": True,
+    })
+    out.pop("error_message", None)
+    return out
 
 
 # ── folder scan + matching ──────────────────────────────────────────────
