@@ -105,6 +105,24 @@
 .fork-tag.manual{background:rgba(var(--accent-rgb,29,185,84),.18);color:rgb(var(--accent-rgb,29,185,84))}
 .fork-empty{color:#777;padding:24px 0;text-align:center}
 .fork-note{color:#888;font-size:12px;margin:0 0 12px}
+.fork-orig-link{color:inherit;text-decoration:underline dotted rgba(255,255,255,.35);text-underline-offset:3px;cursor:pointer}
+.fork-orig-link:hover{color:rgb(var(--accent-light-rgb,var(--accent-rgb,29,185,84)));text-decoration-style:solid}
+.fork-pop-layer{position:fixed;inset:0;z-index:100003;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center}
+.fork-pop{width:560px;max-width:94vw;max-height:84vh;display:flex;flex-direction:column;gap:12px;padding:18px 20px;background:#141414;border:1px solid rgba(255,255,255,.1);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.7);color:#e8e8e8;font-size:14px}
+.fork-pop.wide{width:820px}
+.fork-pop-head{display:flex;align-items:center;gap:12px}
+.fork-pop-head h3{margin:0;flex:1;font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fork-pop-body{flex:1;min-height:80px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+.fork-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px 18px}
+.fork-fact span{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#8a8a8a}
+.fork-fact strong{font-weight:500;word-break:break-word}
+.fork-pop-album{border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:10px 12px}
+.fork-pop-album-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:4px}
+.fork-pop-album-head span{color:#999;font-size:12px;white-space:nowrap}
+.fork-pop-path{color:#8a8a8a;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px}
+.fork-pop-num{width:44px;color:#8a8a8a;font-variant-numeric:tabular-nums;white-space:nowrap}
+.fork-pop-file{max-width:260px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fork-old{color:#8a8a8a;text-decoration:line-through;font-size:12px}
 ` }));
     }
 
@@ -299,17 +317,33 @@
                 if (!value || value === item.translated) return;
                 try {
                     await api('/translations', 'PUT', { kind: item.kind, original: item.original, translated: value });
-                    toast('Translation updated');
+                    toast('Translation updated — “Apply to library…” updates files you already have');
                     load();
                 } catch (err) { toast(err.message, 'error'); }
             };
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
             return el('tr', {}, [
                 el('td', {}, el('span', { class: 'fork-tag' + (item.user_edited ? ' manual' : ''), text: item.kind + (item.user_edited ? ' · edited' : '') })),
-                el('td', { class: 'fork-orig', text: item.original }),
+                el('td', { class: 'fork-orig' }, originalLink(item.kind, item.original)),
                 el('td', {}, input),
                 el('td', { class: 'fork-actions' }, [
                     el('button', { class: 'fork-btn', text: 'Save', onclick: commit }),
+                    ' ',
+                    el('button', {
+                        class: 'fork-btn', text: 'Apply to library…',
+                        title: 'Update files already in your library that carry this name to the current translation',
+                        onclick: async () => {
+                            // an unsaved edit in the box is saved first, so what is applied is what is shown
+                            const value = input.value.trim();
+                            if (value && value !== item.translated) {
+                                try {
+                                    await api('/translations', 'PUT', { kind: item.kind, original: item.original, translated: value });
+                                    item.translated = value;
+                                } catch (err) { toast(err.message, 'error'); return; }
+                            }
+                            openApply(item.kind, item.original, load);
+                        },
+                    }),
                     ' ',
                     el('button', {
                         class: 'fork-btn danger', text: 'Forget', title: 'Remove so it is translated again next time',
@@ -404,7 +438,7 @@
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
             return el('tr', {}, [
                 el('td', {}, el('span', { class: 'fork-tag' + (item.source === 'manual' ? ' manual' : ''), text: item.source })),
-                el('td', { class: 'fork-orig', text: item.original }),
+                el('td', { class: 'fork-orig' }, originalLink('artist', item.original)),
                 el('td', {}, input),
                 el('td', { class: 'fork-actions' }, [
                     el('button', { class: 'fork-btn', text: 'Save', onclick: commit }),
@@ -456,6 +490,148 @@
             ]),
         );
         load();
+    }
+
+    // ── pop-ups over the panel: library details, apply-to-library ─────────
+
+    function popup(title, children, wide) {
+        const box = el('div', { class: 'fork-pop' + (wide ? ' wide' : '') }, [
+            el('div', { class: 'fork-pop-head' }, [
+                el('h3', { text: title }),
+                el('button', { class: 'fork-x', text: '×', 'aria-label': 'Close', onclick: () => layer.remove() }),
+            ]),
+        ].concat(children));
+        const layer = el('div', { class: 'fork-pop-layer', onmousedown: (e) => { if (e.target === layer) layer.remove(); } }, box);
+        layer.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); layer.remove(); } });
+        document.body.append(layer);
+        return layer;
+    }
+
+    /** The original name as a link that shows what the library holds for it. */
+    function originalLink(kind, name) {
+        return el('a', {
+            href: '#', class: 'fork-orig-link', text: name, title: 'Show this in your library',
+            onclick: (e) => { e.preventDefault(); openDetails(kind, name); },
+        });
+    }
+
+    const mmss = (ms) => {
+        const s = Math.round((ms || 0) / 1000);
+        return s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
+    };
+
+    async function openDetails(kind, name) {
+        const body = el('div', { class: 'fork-pop-body' }, el('div', { class: 'fork-empty', text: 'Loading…' }));
+        popup(name, [body], true);
+        let data;
+        try {
+            data = await api('/details?' + new URLSearchParams({ kind, name }));
+        } catch (err) { body.replaceChildren(el('div', { class: 'fork-empty', text: err.message })); return; }
+
+        const facts = [];
+        const fact = (label, value) => { if (value) facts.push(el('div', { class: 'fork-fact' }, [el('span', { text: label }), el('strong', { text: String(value) })])); };
+        const rec = data.record;
+        if (kind === 'artist') {
+            fact('Written as', rec && rec.replacement);
+            fact('Rule from', rec && rec.source);
+            fact('Also known as', (data.also_known_as || []).join(' · '));
+            fact('In library as', (data.library_names || []).join(' · '));
+        } else {
+            fact('Type', kind);
+            fact('Translation', rec && rec.translated);
+            fact('Written as', rec && rec.display);
+            fact('Source', rec && (rec.user_edited ? 'edited by you' : rec.model));
+        }
+        fact('In library', `${data.albums.length} album${data.albums.length === 1 ? '' : 's'} · ${data.track_count} track${data.track_count === 1 ? '' : 's'}${data.truncated ? '+' : ''}`);
+
+        const albums = data.albums.map((album) => el('div', { class: 'fork-pop-album' }, [
+            el('div', { class: 'fork-pop-album-head' }, [
+                el('strong', { text: album.album }),
+                el('span', { text: [album.artist, album.year].filter(Boolean).join(' · ') }),
+            ]),
+            album.folder ? el('div', { class: 'fork-pop-path', text: album.folder, title: album.folder }) : null,
+            el('table', { class: 'fork-table' }, el('tbody', {}, album.tracks.map((t) => el('tr', {}, [
+                el('td', { class: 'fork-pop-num', text: t.number != null ? String(t.number) : '' }),
+                el('td', { text: t.title }),
+                el('td', { class: 'fork-pop-file', text: t.file, title: t.file }),
+                el('td', { class: 'fork-pop-num', text: mmss(t.duration) }),
+            ])))),
+        ]));
+        body.replaceChildren(
+            el('div', { class: 'fork-facts' }, facts),
+            ...(albums.length ? albums : [el('div', { class: 'fork-empty', text: 'Nothing in your library carries this name yet.' })]),
+        );
+    }
+
+    function openApply(kind, original, onDone) {
+        const opts = { rename: true };
+        const body = el('div', { class: 'fork-pop-body' });
+        const status = el('span', { class: 'fork-help', style: 'flex:1' });
+        const go = el('button', { class: 'fork-btn primary', text: 'Apply', disabled: true });
+        const layer = popup(`Apply translation: ${original}`, [
+            el('label', { class: 'fork-check' }, [
+                el('input', { type: 'checkbox', checked: true, onchange: (e) => { opts.rename = e.target.checked; preview(); } }),
+                el('span', {}, ['Also rename the files / album folder', el('small', {
+                    text: 'Off: only the tag changes and files keep their current names.',
+                })]),
+            ]),
+            body,
+            el('div', { class: 'fork-foot', style: 'padding:12px 0 0;border:0' }, [
+                status,
+                el('button', { class: 'fork-btn', text: 'Cancel', onclick: () => layer.remove() }),
+                go,
+            ]),
+        ], true);
+
+        const base = (p) => String(p || '').split('/').pop();
+        async function preview() {
+            go.disabled = true;
+            status.textContent = '';
+            body.replaceChildren(el('div', { class: 'fork-empty', text: 'Checking your library…' }));
+            let data;
+            try {
+                data = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename, dry_run: true });
+            } catch (err) { body.replaceChildren(el('div', { class: 'fork-empty', text: err.message })); return; }
+            if (!data.files.length) {
+                body.replaceChildren(el('div', { class: 'fork-empty', text:
+                    `No files need changing: ${data.checked} checked, all already read “${data.display}” or are not this ${kind}.`
+                    + (data.unreachable ? ` ${data.unreachable} could not be found on disk.` : '') }));
+                return;
+            }
+            const rows = data.files.map((f) => el('tr', {}, [
+                el('td', { class: 'fork-pop-file', text: base(f.path), title: f.path }),
+                el('td', {}, [el('div', { class: 'fork-old', text: f.old }), el('div', { text: f.new })]),
+                el('td', { class: 'fork-pop-file', text: f.rename_to ? `→ ${f.rename_to}` : '' }),
+            ]));
+            const folders = data.folders.map((f) => el('div', { class: 'fork-pop-path', title: `${f.from} → ${f.to}`, text: `Folder: ${base(f.from)}  →  ${base(f.to)}` }));
+            body.replaceChildren(
+                ...folders,
+                el('table', { class: 'fork-table' }, [
+                    el('thead', {}, el('tr', {}, ['File', kind === 'album' ? 'Album tag' : 'Title tag', opts.rename && kind === 'title' ? 'New file name' : ''].map((t) => el('th', { text: t })))),
+                    el('tbody', {}, rows),
+                ]),
+            );
+            status.textContent = `${data.files.length} file${data.files.length === 1 ? '' : 's'} will be updated`
+                + (data.folders.length ? `, ${data.folders.length} folder${data.folders.length === 1 ? '' : 's'} renamed` : '');
+            go.disabled = false;
+        }
+
+        go.addEventListener('click', async () => {
+            go.disabled = true;
+            status.textContent = 'Applying…';
+            try {
+                const done = await api('/translations/apply', 'POST', { kind, original, rename: opts.rename });
+                if (done.errors.length) {
+                    toast(`Updated ${done.written} file(s); ${done.errors.length} problem(s)`, 'error');
+                    status.textContent = done.errors.slice(0, 3).join(' · ');
+                    return;
+                }
+                toast(`Updated ${done.written} file${done.written === 1 ? '' : 's'}${done.renamed ? `, ${done.renamed} renamed` : ''}. Rescan your media server to see it.`);
+                layer.remove();
+                if (onDone) onDone();
+            } catch (err) { status.textContent = err.message; go.disabled = false; }
+        });
+        preview();
     }
 
     // ── modal shell ───────────────────────────────────────────────────────

@@ -127,6 +127,40 @@ def preview_translation():
     return jsonify(success=True, original=value, result=result, changed=result != value)
 
 
+@bp.route("/api/fork/translations/apply", methods=["POST"])
+@admin_only
+def apply_translation_to_library():
+    """Rewrite library files that carry this album/title to the stored
+    translation. ``dry_run`` returns what would change without writing."""
+    from core.fork import retro
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        data = retro.apply_translation(
+            get_database(), str(body.get("kind") or ""), str(body.get("original") or "").strip(),
+            rename=body.get("rename", True) is not False, dry_run=body.get("dry_run") is True)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    except LookupError as exc:
+        return jsonify(success=False, error=str(exc)), 404
+    return jsonify(success=True, **data)
+
+
+@bp.route("/api/fork/details", methods=["GET"])
+@admin_only
+def library_details():
+    """What the library holds for an original album / title / artist name."""
+    from core.fork import retro
+    from database.music_database import get_database
+
+    try:
+        data = retro.details(get_database(), request.args.get("kind") or "", request.args.get("name") or "")
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    return jsonify(success=True, **data)
+
+
 # ── artist name rules ───────────────────────────────────────────────────
 
 @bp.route("/api/fork/artist-names", methods=["GET"])
