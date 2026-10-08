@@ -282,6 +282,13 @@ def move_lyrics_backup(src_audio: Any, dst_audio: Any, with_partner: bool = Fals
         from core.fork import lyrics
 
         lyrics.move_backups(str(src_audio), str(dst_audio), with_partner)
+        # the backup may have been the last thing in an import sub-folder
+        from core.fork import config, import_move
+
+        root = import_move.staging_root() if config.get("import.copy_verify") else None
+        folder = os.path.dirname(os.path.realpath(str(src_audio)))
+        if root and folder.startswith(root.rstrip(os.sep) + os.sep):
+            import_move.remove_empty_parents(folder, root)
     except Exception as exc:
         logger.warning("move_lyrics_backup failed for %s: %s", src_audio, exc)
 

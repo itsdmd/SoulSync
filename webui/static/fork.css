@@ -622,7 +622,7 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-rowhead:hover { background: #14171b; }
 .fork-editor-name small { display: block; color: rgba(255, 255, 255, 0.4); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; }
 .fork-editor-panel { display: flex; gap: 16px; padding: 12px 14px; height: 44vh; max-height: 430px; flex: none; }
-.fork-editor-cover { width: 170px; flex: none; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.fork-editor-cover { width: 190px; flex: none; display: flex; flex-direction: column; gap: 6px; align-items: center; }
 .fork-editor-cover small { color: rgba(255, 255, 255, 0.5); text-align: center; }
 .fork-editor-art {
     width: 160px;
@@ -639,7 +639,10 @@ select.fork-album-input option { background: #181818; }
 }
 .fork-editor-art.changed { border-color: #facc15; }
 .fork-editor-art img { width: 100%; height: 100%; object-fit: cover; }
-.fork-editor-coverbtns { display: flex; gap: 6px; align-items: center; }
+.fork-editor-coverbtns { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.fork-editor .fork-editor-coverbtns .download-control-btn { padding: 5px 10px; font-size: 0.76rem; }
+/* the app's floating help button sits in this corner */
+.fork-editor-panel .fork-album-actions { padding-right: 84px; }
 .fork-editor-check { display: flex; gap: 6px; align-items: center; font-size: 0.76rem; color: rgba(255, 255, 255, 0.7); }
 .fork-editor-tagbox { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .fork-editor-tags { flex: 1; overflow: auto; }
