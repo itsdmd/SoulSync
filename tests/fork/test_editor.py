@@ -75,8 +75,8 @@ def test_tree_and_listing_come_from_the_index_and_follow_the_disk(lib):
 def test_tags_are_read_once_until_the_file_changes(lib, monkeypatch):
     album = os.path.join(lib, "Artist", "Album")
     reads = []
-    real = editor.read_tags
-    monkeypatch.setattr(editor, "read_tags", lambda path: reads.append(path) or real(path))
+    real = editor.read_basic
+    monkeypatch.setattr(editor, "read_basic", lambda path: reads.append(path) or real(path))
     library_index.listing(album)
     library_index.listing(album)
     assert len(reads) == 2
@@ -291,3 +291,35 @@ def test_files_outside_the_import_folder_and_the_switch_off_use_the_plain_move(s
     inside.write_bytes(b"x")
     fork_env.set("fork.import.copy_verify", False)
     assert hooks.import_copy_verify(str(inside), str(tmp_path / "out.flac")) is False and inside.exists()
+
+
+def test_moving_takes_lyrics_along_updates_paths_and_overwrites_nothing(lib, tmp_path):
+    album = os.path.join(lib, "Artist", "Album")
+    db = _Db(str(tmp_path / "lib.db"), [("One", os.path.join(album, "01 - One.flac")),
+                                        ("Two", os.path.join(album, "02 - Two.flac"))])
+    store.save_album_folder("spotify", "al1", album)
+    library_index.start_scan([lib], background=False)
+    other = os.path.join(lib, "Artist", "Empty")
+    out = editor.move([os.path.join(album, "01 - One.flac")], other, db=db)
+    assert out["errors"] == [] and out["moved"] == [os.path.join(other, "01 - One.flac")]
+    assert sorted(os.listdir(other)) == ["01 - One.flac", "01 - One.lrc", "01 - One.original.lrc"]
+    assert db.paths()[0] == os.path.join(other, "01 - One.flac")
+
+    # a folder: everything pointing into it follows, the tree shows it in its new place
+    os.makedirs(os.path.join(lib, "Elsewhere"))
+    out = editor.move([album], os.path.join(lib, "Elsewhere"), db=db)
+    new_album = os.path.join(lib, "Elsewhere", "Album")
+    assert out["moved"] == [new_album] and db.paths()[1] == os.path.join(new_album, "02 - Two.flac")
+    assert store.get_album_folder("spotify", "al1")["folder"] == new_album
+    assert [d["name"] for d in library_index.children(os.path.join(lib, "Elsewhere"))] == ["Album"]
+    assert [d["name"] for d in library_index.children(os.path.join(lib, "Artist"))] == ["Empty"]
+
+    # refused: onto an existing name, a library folder; the same place is a no-op
+    os.makedirs(os.path.join(lib, "Artist", "Album"))
+    bad = editor.move([new_album, lib], os.path.join(lib, "Artist"), db=db)
+    assert bad["moved"] == [] and len(bad["errors"]) == 2 and os.path.isdir(new_album)
+    assert editor.move([os.path.join(other, "01 - One.flac")], other)["moved"] == []
+    with pytest.raises((PermissionError, FileNotFoundError)):
+        editor.move([os.path.join(other, "01 - One.flac")], str(tmp_path))
+    inside = editor.move([os.path.join(lib, "Artist")], os.path.join(lib, "Artist", "Empty"))
+    assert inside["moved"] == [] and "into itself" in inside["errors"][0]

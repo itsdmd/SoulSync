@@ -24,6 +24,10 @@ something, so a later rung can only be reached by fewer constraints:
 5. title alone               an alternative title with no artist
 6. the song's name alone     CJK names only, always the very last query
 
+A Vietnamese track runs the whole ladder twice: first every query as written,
+with its diacritics ("Em của ngày hôm qua"), then, only if that found
+nothing, the same queries without them ("Em cua ngay hom qua").
+
 Whatever a broad query returns is still judged against the track by
 upstream's matcher, so a broad query can find more but cannot accept more.
 """
@@ -33,6 +37,7 @@ from __future__ import annotations
 import copy
 import re
 import threading
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from core.fork import artist_names, config, ollama, store
@@ -118,6 +123,54 @@ def _remember(variants: List[Dict[str, str]], broad: Optional[List[str]] = None)
         for query in broad or []:
             if variants:
                 _variants_by_broad_query[query.strip().lower()] = list(variants)
+
+
+# Letters only Vietnamese uses: đ, ă, ơ, ư and every vowel carrying a tone mark
+# (the U+1EA0–U+1EF9 block). "é" or "ô" alone could as well be French.
+_VIETNAMESE_RE = re.compile("[\u0111\u0110\u0103\u0102\u01a1\u01a0\u01b0\u01af\u1ea0-\u1ef9]")
+
+
+def is_vietnamese(*texts: Any) -> bool:
+    return any(_VIETNAMESE_RE.search(unicodedata.normalize("NFC", str(t or ""))) for t in texts)
+
+
+def strip_diacritics(text: str) -> str:
+    """"Em của ngày hôm qua" -> "Em cua ngay hom qua"."""
+    plain = "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
+    return unicodedata.normalize("NFC", plain.replace("\u0111", "d").replace("\u0110", "D"))
+
+
+def vietnamese_passes(queries: List[str], first: str = "") -> List[str]:
+    """The ladder twice over: every query that carries diacritics first, as
+    written (``first``, the plain artist + title, leads them if upstream left
+    it out); then the whole ladder again without diacritics, which is how most
+    Vietnamese files are actually named."""
+    marked: List[str] = []
+    seen = set()
+    for query in ([first] if first else []) + list(queries):
+        if query and strip_diacritics(query) != query and query.lower() not in seen:
+            seen.add(query.lower())
+            marked.append(query)
+    out = list(marked)
+    for query in list(queries) + marked:
+        plain = strip_diacritics(query or "")
+        if plain and plain.lower() not in seen:
+            seen.add(plain.lower())
+            out.append(plain)
+    return out
+
+
+def _remember_plain(queries: List[str]) -> None:
+    """What a query finds may be matched the same way once its diacritics are gone."""
+    with _lock:
+        for query in queries:
+            key, plain = query.strip().lower(), strip_diacritics(query).strip().lower()
+            if plain == key:
+                continue
+            if key in _variant_by_query:
+                _variant_by_query.setdefault(plain, _variant_by_query[key])
+            if key in _variants_by_broad_query:
+                _variants_by_broad_query.setdefault(plain, _variants_by_broad_query[key])
 
 
 def _ascii(text: str) -> str:
@@ -328,17 +381,19 @@ def augment_queries(track: Any, queries: List[str]) -> List[str]:
     variants = plan["variants"]
     broad = broaden(artist, title, album, variants, plan["albums"], plan["artists"],
                     max(0, min(int(config.get("search_terms.max_broad") or 0), 12)))
-    if not variants and not broad:
-        return queries
-    _remember(variants, broad)
     out = list(queries)
-    seen = {q.lower() for q in out if q}
-    for query in [f"{v['artist']} {v['title']}".strip() for v in variants] + broad:
-        if query.lower() not in seen:
-            out.append(query)
-            seen.add(query.lower())
-    if broad:
-        logger.info("Broader searches for %r - %r: %s", artist, title, broad)
+    if variants or broad:
+        _remember(variants, broad)
+        seen = {q.lower() for q in out if q}
+        for query in [f"{v['artist']} {v['title']}".strip() for v in variants] + broad:
+            if query.lower() not in seen:
+                out.append(query)
+                seen.add(query.lower())
+        if broad:
+            logger.info("Broader searches for %r - %r: %s", artist, title, broad)
+    if config.get("search_terms.vietnamese_passes") and is_vietnamese(title, artist, album):
+        _remember_plain(out)
+        out = vietnamese_passes(out, f"{artist} {title}")
     return out
 
 

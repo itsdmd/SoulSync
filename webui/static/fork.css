@@ -560,7 +560,7 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-side {
     width: 300px;
     flex: none;
-    overflow: auto;
+    overflow: hidden;
     border-right: 1px solid rgba(255, 255, 255, 0.08);
     padding: 8px 0;
 }
@@ -679,3 +679,15 @@ select.fork-album-input option { background: #181818; }
     .fork-editor-row > span:nth-child(n+5) { display: none; }
     .fork-editor-panel { flex-direction: column; height: auto; max-height: 55vh; overflow: auto; }
 }
+
+.fork-editor-side { display: flex; flex-direction: column; padding-top: 0; }
+.fork-editor-treefilter { padding: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.fork-editor-treefilter .fork-album-input { width: 100%; }
+.fork-editor-tree { flex: 1; overflow: auto; padding: 6px 0; }
+.fork-editor-tree[hidden] { display: none; }
+.fork-editor-hit small { display: block; color: rgba(255, 255, 255, 0.4); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; }
+.fork-editor-drop,
+.fork-editor-row.fork-editor-drop,
+.fork-editor-node.fork-editor-drop { background: rgba(250, 204, 21, 0.22); outline: 1px dashed #facc15; outline-offset: -1px; }
+.fork-editor-list.fork-editor-drop { background: rgba(250, 204, 21, 0.06); }
+.fork-editor-moveto { margin: 4px 0 10px; word-break: break-all; }

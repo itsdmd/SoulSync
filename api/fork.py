@@ -546,8 +546,8 @@ def editor_search():
 
     try:
         base = editor.safe_path(request.args.get("path")) if request.args.get("path") else None
-        return jsonify(success=True, **library_index.search(request.args.get("q") or "", base),
-                       index=library_index.status())
+        return jsonify(success=True, index=library_index.status(), **library_index.search(
+            request.args.get("q") or "", base, dirs_only=request.args.get("dirs") == "1"))
     except _EDITOR_ERRORS as exc:
         return _editor_error(exc)
 
@@ -625,5 +625,20 @@ def editor_bulk_rename():
             (body.get("paths") or [])[:5000], body.get("find"), body.get("replace"),
             regex=bool(body.get("regex")), case_sensitive=bool(body.get("case_sensitive")),
             apply=bool(body.get("apply")), db=get_database()))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/move", methods=["POST"])
+@admin_only
+def editor_move():
+    """Move files and folders into another library folder (drag and drop)."""
+    from core.fork import editor
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        return jsonify(success=True, **editor.move((body.get("paths") or [])[:2000], body.get("destination"),
+                                                   db=get_database()))
     except _EDITOR_ERRORS as exc:
         return _editor_error(exc)

@@ -47,6 +47,9 @@ def defaults() -> Dict[str, Any]:
             # Broader queries after those (artist + album, album, part of the
             # album name, title alone); 0 turns them off.
             "max_broad": 6,
+            # A Vietnamese track is searched with its diacritics first, then
+            # again without them.
+            "vietnamese_passes": True,
             # Also accept results that match the suggested artist/title rather
             # than only the original (e.g. a romanized filename for a CJK track).
             "match_variants": True,

@@ -220,3 +220,36 @@ def test_spare_album_spellings_are_searched_alone_and_artist_in_a_title_is_dropp
     assert out[1:] == ["Radiohead Pablo Honey", "Radiohead Pablo Honey Deluxe",          # 2 (two per step)
                        "Pablo Honey", "Pablo Honey Deluxe",                              # 3
                        "Pablo Honey Collectors", "Pablo Honey Japan"]                    # 4: the rest
+
+
+def test_a_vietnamese_track_is_searched_with_diacritics_then_without(llm, fork_env):
+    from core.fork import search_terms
+
+    assert search_terms.is_vietnamese("Em của ngày hôm qua") and search_terms.is_vietnamese("Đen")
+    assert not search_terms.is_vietnamese("Café del Mar", "Björk", "Beyoncé", "夜曲", "")
+    assert search_terms.strip_diacritics("Sơn Tùng M-TP Đừng Làm Trái Tim Anh Đau") == "Son Tung M-TP Dung Lam Trai Tim Anh Dau"
+
+    fork_env.set("fork.search_terms.max_broad", 2)
+    llm.replies = [{"titles": ["Yesterday's Me"], "albums": []}]
+    track = SimpleNamespace(name="Em Của Ngày Hôm Qua", artists=["Sơn Tùng M-TP"], album="m-tp M-TP")
+    # upstream had already folded its own query
+    out = hooks.augment_search_queries(track, ["Son Tung M-TP Em Cua Ngay Hom Qua"])
+    assert out == [
+        "Sơn Tùng M-TP Em Của Ngày Hôm Qua",        # pass 1: as written
+        "Sơn Tùng M-TP Yesterday's Me",
+        "Sơn Tùng M-TP m-tp M-TP",
+        "Son Tung M-TP Em Cua Ngay Hom Qua",        # pass 2: the same ladder without diacritics
+        "Son Tung M-TP Yesterday's Me",
+        "Son Tung M-TP m-tp M-TP",
+        "m-tp M-TP",
+    ]
+    # a result of a folded query is still matched against the variant behind it
+    assert [t.name for t in search_terms.alternate_tracks(track, "Son Tung M-TP Yesterday's Me")] == ["Yesterday's Me"]
+
+    fork_env.set("fork.search_terms.vietnamese_passes", False)
+    assert hooks.augment_search_queries(track, ["x"])[0] == "x"
+    # other languages are left exactly as they were
+    fork_env.set("fork.search_terms.vietnamese_passes", True)
+    llm.replies = [{"titles": [], "albums": []}]
+    french = SimpleNamespace(name="Déjà Vu", artists=["Beyoncé"], album="B'Day")
+    assert hooks.augment_search_queries(french, ["beyonce deja vu"])[0] == "beyonce deja vu"

@@ -206,6 +206,13 @@ def read_tags(path: str) -> Dict[str, Any]:
             "bitrate": int(getattr(info, "bitrate", 0) or 0)}
 
 
+def read_basic(path: str) -> Dict[str, str]:
+    """Just what the file list shows; no cover is touched."""
+    audio, kind = _open(path)
+    return {"title": _read_field(audio, kind, "title"), "artist": _read_field(audio, kind, "artist"),
+            "album": _read_field(audio, kind, "album"), "track": _read_field(audio, kind, "tracknumber")}
+
+
 def cover_of(path: str) -> Optional[Tuple[bytes, str]]:
     audio, kind = _open(path)
     pictures = _pictures(audio, kind)
@@ -428,6 +435,54 @@ def rename(path: Any, name: Any, db: Any = None) -> Dict[str, Any]:
     return {"path": new, "name": new_name, "sidecars": moved}
 
 
+def move(paths: List[Any], destination: Any, db: Any = None) -> Dict[str, Any]:
+    """Move files and folders into the folder ``destination``. A track's
+    lyrics files go with it; library paths and saved album folders follow.
+    Nothing is ever overwritten. ``{"moved": [new paths], "errors": [...]}``."""
+    import shutil
+
+    from core.fork import library_index
+
+    target_dir = safe_path(destination)
+    if not os.path.isdir(target_dir):
+        raise ValueError("The destination is not a folder")
+    moved: List[str] = []
+    errors: List[str] = []
+    for raw in paths:
+        name = os.path.basename(str(raw).rstrip(os.sep))
+        try:
+            old = safe_path(raw)
+            if _is_root(old):
+                raise PermissionError("a library folder itself cannot be moved")
+            if os.path.normpath(os.path.dirname(old)) == os.path.normpath(target_dir):
+                continue                                    # already there
+            is_dir = os.path.isdir(old)
+            if is_dir and (target_dir + os.sep).startswith(old.rstrip(os.sep) + os.sep):
+                raise ValueError("a folder cannot be moved into itself")
+            new = os.path.join(target_dir, os.path.basename(old))
+            if os.path.exists(new):
+                raise FileExistsError("something with that name is already there")
+            sidecars: List[Tuple[str, str]] = []
+            if not is_dir and library_index.kind_of(os.path.splitext(old)[1]) == "audio":
+                old_stem, new_stem = os.path.splitext(old)[0], os.path.splitext(new)[0]
+                for suffix in SIDECARS:
+                    if os.path.isfile(old_stem + suffix) and not os.path.exists(new_stem + suffix):
+                        sidecars.append((old_stem + suffix, new_stem + suffix))
+            shutil.move(old, new)
+            for src, dst in sidecars:
+                try:
+                    shutil.move(src, dst)
+                    library_index.moved(src, dst, False)
+                except OSError as exc:
+                    logger.warning("lyrics file %s not moved: %s", src, exc)
+            _repoint_library(db, old, new, is_dir)
+            library_index.moved(old, new, is_dir)
+            moved.append(new)
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    return {"moved": moved, "errors": errors, "destination": target_dir}
+
+
 def _replacer(find: str, replace: str, regex: bool, case_sensitive: bool):
     if not find:
         raise ValueError("Nothing to look for")
@@ -507,5 +562,5 @@ def field_list() -> List[Dict[str, str]]:
     return [{"name": name, "label": label} for name, label, *_rest in FIELDS]
 
 
-__all__ = ["FIELDS", "bulk_rename", "cover_of", "field_list", "read_tags", "rename", "roots", "safe_path",
-           "save_tags"]
+__all__ = ["FIELDS", "bulk_rename", "cover_of", "field_list", "move", "read_basic", "read_tags", "rename",
+           "roots", "safe_path", "save_tags"]

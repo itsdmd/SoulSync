@@ -5,6 +5,9 @@
 // the contents of the open folder (a file browser), and the tag editor
 // (tag / original value / new value, as in MusicBrainz Picard).
 //
+// Files and folders are moved by dragging them onto a folder, in the list or
+// the tree; a box above the tree filters folders by name.
+//
 // The tree and the search read a cached index of the library kept by the
 // server (core/fork/library_index.py); only the folder that is open is read
 // from disk. Backed by /api/fork/editor/* (api/fork.py). See FORK.md.
@@ -61,6 +64,12 @@
         // ── skeleton ─────────────────────────────────────────────────────
         s.indexEl = el('span', { class: 'fork-editor-index' });
         s.treeEl = el('div', { class: 'fork-editor-tree', role: 'tree' });
+        s.treeHitsEl = el('div', { class: 'fork-editor-tree', hidden: true });
+        s.treeFilterEl = el('input', {
+            class: 'fork-album-input', type: 'search', placeholder: 'Filter folders…', 'aria-label': 'Filter the folder tree',
+            oninput: () => { clearTimeout(s.treeTimer); s.treeTimer = setTimeout(filterTree, 250); },
+            onkeydown: (e) => { if (e.key === 'Escape' && s.treeFilterEl.value) { e.stopPropagation(); s.treeFilterEl.value = ''; filterTree(); } },
+        });
         s.searchEl = el('input', {
             class: 'fork-album-input', type: 'search', placeholder: 'Search files and folders…',
             'aria-label': 'Search the library',
@@ -80,6 +89,8 @@
         s.renameBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Rename…', disabled: true, title: 'Rename the selected file or folder (F2)', onclick: () => openRename() });
         s.bulkBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Bulk rename…', disabled: true, title: 'Find and replace in the names of the selected items', onclick: () => openBulkRename() });
         s.listEl = el('div', { class: 'fork-editor-list', tabindex: '0', onkeydown: onListKey });
+        // dropping on the empty part of the list moves into the open folder
+        dropTarget(s.listEl, () => (s.searching ? '' : s.path));
         s.coverEl = el('div', { class: 'fork-editor-cover' });
         s.tagsEl = el('div', { class: 'fork-editor-tags' });
         s.statusEl = el('span', { class: 'fork-album-status' });
@@ -94,7 +105,10 @@
                 el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Close', onclick: close }),
             ]),
             el('div', { class: 'fork-editor-body' }, [
-                el('div', { class: 'fork-editor-side' }, [s.treeEl]),
+                el('div', { class: 'fork-editor-side' }, [
+                    el('div', { class: 'fork-editor-treefilter' }, [s.treeFilterEl]),
+                    s.treeEl, s.treeHitsEl,
+                ]),
                 el('div', { class: 'fork-editor-main' }, [
                     el('div', { class: 'fork-editor-search' }, [s.searchEl, ...s.modeBtns]),
                     el('div', { class: 'fork-editor-bar' }, [s.crumbEl, s.countEl, s.renameBtn, s.bulkBtn]),
@@ -120,6 +134,7 @@
         if (!page) return;
         clearTimeout(page.searchTimer);
         clearTimeout(page.pollTimer);
+        clearTimeout(page.treeTimer);
         document.removeEventListener('keydown', onKey, true);
         page.root.remove();
         page = null;
@@ -169,6 +184,8 @@
             onclick: () => navigate(node.path),
             ondblclick: () => toggle(node),
         }, [node.caret, el('span', { class: 'fork-editor-nodename', text: dir.name })]);
+        if (depth > 0) dragSource(node.row, () => [node.path]);       // a library folder itself stays put
+        dropTarget(node.row, () => node.path);
         node.box = el('div', { class: 'fork-editor-kids', hidden: true });
         node.el = el('div', {}, [node.row, node.box]);
         node.depth = depth;
@@ -195,7 +212,7 @@
     // Open the tree down to `path` and mark it.
     async function reveal(path) {
         const s = page;
-        if (!s) return;
+        if (!s || !s.tree) return;
         let level = s.tree;
         let found = null;
         for (;;) {
@@ -226,10 +243,121 @@
             return null;
         };
         const node = s && find(s.tree);
+        if (node && !node.loaded && !node.caret.textContent) node.caret.textContent = '▸';
         if (!node || !node.loaded) return;
         node.loaded = false;
         node.open = false;
         await toggle(node, true);
+    }
+
+    // The filter box above the tree: folders by name, from the index. It does
+    // not touch the list on the right.
+    async function filterTree() {
+        const s = page;
+        if (!s) return;
+        const text = s.treeFilterEl.value.trim();
+        s.treeEl.hidden = !!text;
+        s.treeHitsEl.hidden = !text;
+        if (!text) { reveal(s.path); return; }
+        const seq = s.treeSeq = (s.treeSeq || 0) + 1;
+        try {
+            const data = await api('/search' + q({ q: text, dirs: '1' }));
+            if (page !== s || seq !== s.treeSeq) return;
+            const rows = data.dirs.map((dir) => {
+                const where = dir.path.slice(0, dir.path.length - dir.name.length - 1);
+                const row = el('div', { class: 'fork-editor-node fork-editor-hit', title: dir.path, onclick: () => navigate(dir.path) },
+                    [el('span', { class: 'fork-editor-nodename' }, [dir.name, el('small', { text: where })])]);
+                dragSource(row, () => [dir.path]);
+                dropTarget(row, () => dir.path);
+                return row;
+            });
+            if (!rows.length) rows.push(el('div', { class: 'fork-album-note', text: data.index && data.index.running ? 'Nothing yet — the library is still being indexed.' : 'No folder with that name.' }));
+            if (data.truncated) rows.push(el('div', { class: 'fork-album-note', text: 'Showing the first matches only.' }));
+            s.treeHitsEl.replaceChildren(...rows);
+        } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // ── moving by drag and drop ──────────────────────────────────────────
+    // Anything in the list or the tree can be dragged onto a folder in either;
+    // dropping on the empty part of the list moves into the open folder.
+
+    const inside = (path, folder) => path === folder || path.startsWith(folder.replace(/\/+$/, '') + '/');
+    const parentOf = (path) => path.slice(0, path.lastIndexOf('/')) || '/';
+
+    function dragSource(node, getPaths) {
+        node.draggable = true;
+        node.addEventListener('dragstart', (e) => {
+            const s = page;
+            if (!s || dirty()) { e.preventDefault(); blocked(); return; }
+            s.drag = getPaths();
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', s.drag.join('\n')); } catch (_) { /* some browsers refuse */ }
+            e.stopPropagation();
+        });
+        node.addEventListener('dragend', () => {
+            if (page) page.drag = null;
+            document.querySelectorAll('.fork-editor-drop').forEach((n) => n.classList.remove('fork-editor-drop'));
+        });
+    }
+
+    // A drop is allowed onto a folder that is not one of the dragged items,
+    // not inside one of them, and not where they already are.
+    function canDrop(dest) {
+        const paths = page && page.drag;
+        return !!dest && !!paths && paths.length > 0
+            && !paths.some((p) => inside(dest, p)) && paths.some((p) => parentOf(p) !== dest);
+    }
+
+    function dropTarget(node, getDest) {
+        node.addEventListener('dragover', (e) => {
+            if (!canDrop(getDest())) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            node.classList.add('fork-editor-drop');
+        });
+        node.addEventListener('dragleave', () => node.classList.remove('fork-editor-drop'));
+        node.addEventListener('drop', (e) => {
+            node.classList.remove('fork-editor-drop');
+            const dest = getDest();
+            if (!canDrop(dest)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            confirmMove(page.drag.slice(), dest);
+        });
+    }
+
+    function confirmMove(paths, dest) {
+        const s = page;
+        const names = paths.map((p) => p.slice(p.lastIndexOf('/') + 1));
+        const status = el('span', { class: 'fork-album-status' });
+        const go = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Move' });
+        go.addEventListener('click', async () => {
+            go.disabled = true;
+            try {
+                const data = await api('/move', { paths, destination: dest });
+                root.remove();
+                if (data.errors.length) toast(`${data.moved.length} moved, ${data.errors.length} not — ${data.errors[0]}`, 'error');
+                else toast(`Moved ${data.moved.length} item${data.moved.length === 1 ? '' : 's'}`);
+                if (page !== s) return;
+                for (const folder of new Set(paths.map(parentOf).concat([dest]))) await refreshTree(folder);
+                if (s.treeFilterEl.value.trim()) filterTree();
+                // the open folder itself may have been moved away
+                if (paths.some((p) => inside(s.path, p))) navigate(dest); else reload();
+            } catch (err) { status.textContent = err.message; status.classList.add('fork-volume-problem'); go.disabled = false; }
+        });
+        const root = dialog('fork-editor-rename', [
+            el('h3', { text: `Move ${paths.length} item${paths.length === 1 ? '' : 's'}?` }),
+            el('div', { class: 'fork-album-note', text: `${names.slice(0, 4).join(', ')}${names.length > 4 ? ` and ${names.length - 4} more` : ''}` }),
+            el('div', { class: 'fork-editor-moveto' }, ['into ', el('strong', { text: dest })]),
+            el('div', { class: 'fork-album-note', text: 'Lyrics files go with their track. Nothing is overwritten: an item whose name is already there is left where it is.' }),
+            el('div', { class: 'fork-album-actions' }, [
+                status,
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                go,
+            ]),
+        ]);
+        go.focus();
     }
 
     // ── folder contents ──────────────────────────────────────────────────
@@ -348,8 +476,10 @@
         const head = el('div', { class: 'fork-editor-row fork-editor-rowhead' }, ['Name', 'Title', 'Artist', 'Album', '#', 'Size', 'Modified'].map((t) => el('span', { text: t })));
         const rows = [];
         if (!s.searching && s.parent) {
-            rows.push(el('div', { class: 'fork-editor-row', ondblclick: () => navigate(s.parent), title: 'Up one folder' },
-                [el('span', { text: '📁 ..' }), ...Array.from({ length: 6 }, () => el('span'))]));
+            const up = el('div', { class: 'fork-editor-row', ondblclick: () => navigate(s.parent), title: 'Up one folder' },
+                [el('span', { text: '📁 ..' }), ...Array.from({ length: 6 }, () => el('span'))]);
+            dropTarget(up, () => s.parent);
+            rows.push(up);
         }
         for (const item of s.items) {
             const where = s.searching ? item.path.slice(0, item.path.length - item.name.length - 1) : '';
@@ -365,6 +495,8 @@
                 el('span', { text: item.kind === 'dir' ? '' : sizeText(item.size || 0) }),
                 el('span', { text: item.kind === 'dir' ? '' : dateText(item.mtime) }),
             ]);
+            dragSource(row, () => (s.selected.has(item.path) ? chosen().map((i) => i.path) : [item.path]));
+            if (item.kind === 'dir') dropTarget(row, () => item.path);
             item.row = row;
             rows.push(row);
         }
