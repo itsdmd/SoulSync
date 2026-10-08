@@ -1369,11 +1369,13 @@ def build_final_path_for_track(context, artist_context, album_info, file_ext, cr
 
 # ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
 # Wraps get_file_path_from_template so artist rules and translated names
-# apply to every path built from a template. See FORK.md.
+# apply to every path built from a template, and the artist-level folder is
+# named after the first album artist only. See FORK.md.
 _upstream_get_file_path_from_template = get_file_path_from_template
 
 
 def get_file_path_from_template(context: dict, template_type: str = "album_path") -> tuple[str, str]:  # noqa: F811
     from core.fork import hooks as _fork_hooks
-    return _upstream_get_file_path_from_template(
-        _fork_hooks.transform_template_context(context, template_type), template_type)
+    context = _fork_hooks.transform_template_context(context, template_type)
+    return _fork_hooks.first_artist_folder(
+        _upstream_get_file_path_from_template(context, template_type), context, template_type)

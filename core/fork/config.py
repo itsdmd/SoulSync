@@ -110,6 +110,11 @@ def defaults() -> Dict[str, Any]:
             # original, then delete the original and the folders left empty.
             "copy_verify": True,
         },
+        "paths": {
+            # An album by several album artists goes into the folder of the
+            # first one ("A/A, B - Album"), not a folder of its own ("A, B/…").
+            "first_album_artist_folder": True,
+        },
     }
 
 

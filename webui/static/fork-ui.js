@@ -16,6 +16,8 @@
             'Each album name is translated once and reused, so every track of an album gets the same name.'],
         ['translate.apply_to_tags', 'Apply to tags', 'Write artist rules and translated names into the file tags.'],
         ['translate.apply_to_paths', 'Apply to folders and file names', ''],
+        ['paths.first_album_artist_folder', 'Artist folder: first album artist only',
+            'An album by several album artists is filed in the folder of the first one ("A/A, B - Album") instead of a folder named after all of them. The album folder and file names keep the full credit.'],
         ['translate.write_original_tags', 'Keep originals in SOULSYNC_ORIGINAL_* tags', ''],
         ['lyrics.enabled', 'Translate CJK lyrics', ''],
         ['import.rename_only_auto', 'Automatic import: rename only',

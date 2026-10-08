@@ -98,6 +98,36 @@ def transform_template_context(context: Dict[str, Any], template_type: str = "al
         return context
 
 
+def first_artist_folder(result: Any, context: Any, template_type: str = "album_path") -> Any:
+    """An album by several album artists is filed under the first one: the
+    artist-level folder (the first folder of the path, when it is the album
+    artist and nothing else) is named after the first album artist only. The
+    album folder and the file name keep the full credit."""
+    if not _active():
+        return result
+    try:
+        from core.fork import artist_format, config
+        from core.imports.paths import sanitize_filename
+
+        if template_type not in ("album_path", "single_path") or not isinstance(context, dict) \
+                or not config.get("paths.first_album_artist_folder"):
+            return result
+        folder, name = result
+        credit = context.get("albumartist") or context.get("artist")
+        if not folder or not isinstance(credit, str):
+            return result
+        names = artist_format.split_credit(credit)
+        head, sep, rest = folder.partition(os.sep)
+        # values are cleaned once as template values and once as a folder name
+        if len(names) < 2 or head != sanitize_filename(sanitize_filename(credit)):
+            return result
+        first = sanitize_filename(sanitize_filename(names[0]))
+        return (first + sep + rest, name) if first else result
+    except Exception as exc:
+        logger.warning("first_artist_folder failed: %s", exc)
+        return result
+
+
 def after_metadata_enhanced(file_path: str, context: Optional[Dict[str, Any]] = None) -> None:
     try:
         if is_rename_only(context) or not _active():
