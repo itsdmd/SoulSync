@@ -6,6 +6,7 @@ import type {
   WishlistArtistGroup,
 } from '../-wishlist.types';
 
+import { forkArtistOf, forkIsAlbumGroup } from '../-wishlist.fork'; // fork
 import {
   artistHue,
   failingTitle,
@@ -82,7 +83,10 @@ export function WishlistOrb({
       <div className="wl-orb-tooltip">
         {group.name}
         <br />
-        <span>{trackCountLabel(group.total)}</span>
+        <span>
+          {forkIsAlbumGroup(group) ? `${forkArtistOf(group)} · ` : ''}
+          {trackCountLabel(group.total)}
+        </span>
       </div>
 
       <div
@@ -122,7 +126,7 @@ export function WishlistOrb({
         title="View artist"
         onClick={(event) => {
           event.stopPropagation();
-          window._navigateToArtistFromWishlist?.(group.name);
+          window._navigateToArtistFromWishlist?.(forkArtistOf(group)); // fork
         }}
       >
         {group.name}
@@ -174,7 +178,7 @@ export function WishlistOrb({
               onRemoveArtist();
             }}
           >
-            Remove artist
+            {forkIsAlbumGroup(group) ? 'Remove album' : 'Remove artist'}
           </button>
         </div>
         {everExpandedRef.current && hasAlbums ? (

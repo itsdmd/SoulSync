@@ -7,6 +7,7 @@ import type {
   WishlistBulkResponse,
 } from '../-wishlist.types';
 
+import { forkArtistOf, forkIsAlbumGroup } from '../-wishlist.fork'; // fork
 import { trackCountLabel } from '../-wishlist.helpers';
 import { openWishlistInspector } from '../../../features/downloads/inspector-modal';
 
@@ -377,12 +378,13 @@ export function WishlistList({
               title="Open artist"
               onClick={(event) => {
                 event.stopPropagation();
-                window._navigateToArtistFromWishlist?.(group.name);
+                window._navigateToArtistFromWishlist?.(forkArtistOf(group)); // fork
               }}
             >
               {group.name}
             </button>
             <span className="wl-list-artist-meta">
+              {forkIsAlbumGroup(group) ? `${forkArtistOf(group)} · ` : ''}
               {group.total} track{group.total === 1 ? '' : 's'}
             </span>
             {group.failingCount > 0 && (

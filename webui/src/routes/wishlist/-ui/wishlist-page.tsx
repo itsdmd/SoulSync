@@ -25,6 +25,15 @@ import {
   wishlistTracksQueryOptions,
 } from '../-wishlist.api';
 import {
+  forkFilterAlbumGroups,
+  forkGroupByAlbum,
+  forkGroupImages,
+  forkIsAlbumGroup,
+  forkLoadGroupBy,
+  forkSaveGroupBy,
+  type WishlistGroupBy,
+} from '../-wishlist.fork'; // fork
+import {
   buildArtistImageMap,
   filterWishlistGroups,
   groupWishlistArtists,
@@ -89,6 +98,13 @@ export function WishlistPage() {
   // The nebula keeps its own sort, independent of the list's triage sort —
   // each view remembers how you like to scan it.
   const [nebulaSort, setNebulaSort] = useState<NebulaSort>('busiest');
+  // fork: group by artist (upstream) or by album.
+  const [groupBy, setGroupBy] = useState<WishlistGroupBy>(forkLoadGroupBy);
+  const pickGroupBy = (next: WishlistGroupBy) => {
+    setGroupBy(next);
+    forkSaveGroupBy(next);
+    setExpandedArtist(null);
+  };
 
   const statsQuery = useQuery(wishlistStatsQueryOptions(profileId));
   const cycleQuery = useQuery(wishlistCycleQueryOptions(profileId));
@@ -123,9 +139,21 @@ export function WishlistPage() {
     );
   }, [albumsQuery.data?.tracks, singlesQuery.data?.tracks]);
 
+  // fork: album groups have the artist-group shape, so both views take them as they are.
+  const albumGroups = useMemo(
+    () => (groupBy === 'album' ? forkGroupByAlbum(groups) : null),
+    [groups, groupBy],
+  );
+  const groupImages = useMemo(
+    () => (albumGroups ? forkGroupImages(albumGroups) : artistImages),
+    [albumGroups, artistImages],
+  );
   const visibleGroups = useMemo(
-    () => filterWishlistGroups(groups, search.q, search.failing),
-    [groups, search.q, search.failing],
+    () =>
+      albumGroups
+        ? forkFilterAlbumGroups(albumGroups, search.q, search.failing)
+        : filterWishlistGroups(groups, search.q, search.failing),
+    [albumGroups, groups, search.q, search.failing],
   );
 
   const nebulaGroups = useMemo(() => {
@@ -257,8 +285,10 @@ export function WishlistPage() {
       gate a manual remove does. */
   const onRemoveArtist = async (group: WishlistArtistGroup) => {
     const confirmed = await window.showConfirmDialog?.({
-      title: 'Remove Artist',
-      message: `Remove ${trackCountLabel(group.total)} by "${group.name}" from the wishlist?`,
+      title: forkIsAlbumGroup(group) ? 'Remove Album' : 'Remove Artist', // fork
+      message: forkIsAlbumGroup(group)
+        ? `Remove ${trackCountLabel(group.total)} of "${group.name}" from the wishlist?`
+        : `Remove ${trackCountLabel(group.total)} by "${group.name}" from the wishlist?`,
       confirmText: 'Remove',
       destructive: true,
     });
@@ -561,6 +591,27 @@ export function WishlistPage() {
                     </select>
                   </label>
                 )}
+                {/* fork: group by artist or by album */}
+                <div className="wlp-segmented" role="tablist" aria-label="Group wishlist by">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={groupBy === 'artist'}
+                    title="One group per artist"
+                    onClick={() => pickGroupBy('artist')}
+                  >
+                    Artists
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={groupBy === 'album'}
+                    title="One group per album"
+                    onClick={() => pickGroupBy('album')}
+                  >
+                    Albums
+                  </button>
+                </div>
                 <div className="wlp-segmented" role="tablist" aria-label="Wishlist view">
                   <button
                     type="button"
@@ -617,7 +668,7 @@ export function WishlistPage() {
               {view === 'list' ? (
                 <WishlistList
                   groups={visibleGroups}
-                  artistImages={artistImages}
+                  artistImages={groupImages}
                   filterActive={Boolean(search.q?.trim()) || search.failing}
                   onRemoveAlbum={(albumName) => void onRemoveAlbum(albumName)}
                   onRemoveTrack={(trackId) => removeTrack.mutate(trackId)}
@@ -638,7 +689,7 @@ export function WishlistPage() {
                           key={group.name}
                           group={group}
                           index={index}
-                          artistImages={artistImages}
+                          artistImages={groupImages}
                           currentCycle={currentCycle}
                           processing={processing}
                           expanded={expandedArtist === group.name}
