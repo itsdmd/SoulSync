@@ -238,6 +238,26 @@ def scan_single_merges(job: Any, context: Any, result: Any) -> None:
         logger.warning("scan_single_merges failed: %s", exc)
 
 
+def import_copy_verify(src: Any, dst: Any) -> bool:
+    """A file leaving the import folder: copy, verify, delete the original
+    and the folders left empty. True when handled here. A copy that fails or
+    does not match RAISES (the original is intact): that must fail the import
+    rather than fall back to a plain move."""
+    if not _active():
+        return False
+    try:
+        from core.fork import import_move
+
+        root = import_move.applies(src)
+    except Exception as exc:
+        logger.debug("import_copy_verify not applied: %s", exc)
+        return False
+    if not root:
+        return False
+    import_move.copy_verify_delete(src, dst, root)
+    return True
+
+
 def incomplete_album_covered(details: Any) -> str:
     """Album Completeness: the saved folder that holds the whole album, or ""."""
     if not _active() or not isinstance(details, dict):

@@ -103,6 +103,9 @@ def defaults() -> Dict[str, Any]:
             # The automatic import watcher moves/renames only, leaving file
             # metadata untouched (manual imports have their own switch).
             "rename_only_auto": False,
+            # Files leaving the import folder: copy, compare the copy with the
+            # original, then delete the original and the folders left empty.
+            "copy_verify": True,
         },
     }
 

@@ -3,6 +3,8 @@ artist-name tagging rules. Self-contained; see FORK.md."""
 
 from __future__ import annotations
 
+import os
+
 from flask import Blueprint, jsonify, request
 
 from core.fork import artist_names, config, ollama, store, translate
@@ -473,3 +475,155 @@ def volumes_update_finding(finding_id: int):
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         return _folder_error(exc)
     return jsonify(success=True, details=details)
+
+
+# ── Tag Editor page ─────────────────────────────────────────────────────
+
+def _editor_error(exc: Exception):
+    status = 404 if isinstance(exc, FileNotFoundError) else 403 if isinstance(exc, PermissionError) else 400
+    return jsonify(success=False, error=str(exc)), status
+
+
+_EDITOR_ERRORS = (ValueError, PermissionError, FileNotFoundError, FileExistsError, OSError)
+
+
+@bp.route("/api/fork/editor/roots", methods=["GET"])
+@admin_only
+def editor_roots():
+    """The library folders, the tag fields, and the state of the folder index
+    (the first full walk is started here when the library was never indexed)."""
+    from core.fork import editor, library_index
+
+    roots = editor.roots()
+    return jsonify(success=True, roots=[{"path": r, "name": r, "has_children": True} for r in roots],
+                   fields=editor.field_list(), index=library_index.ensure_started(roots))
+
+
+@bp.route("/api/fork/editor/scan", methods=["GET", "POST"])
+@admin_only
+def editor_scan():
+    from core.fork import editor, library_index
+
+    if request.method == "POST":
+        return jsonify(success=True, index=library_index.start_scan(editor.roots()))
+    return jsonify(success=True, index=library_index.status())
+
+
+@bp.route("/api/fork/editor/tree", methods=["GET"])
+@admin_only
+def editor_tree():
+    from core.fork import editor, library_index
+
+    try:
+        path = editor.safe_path(request.args.get("path"))
+        return jsonify(success=True, path=path, dirs=library_index.children(path))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/list", methods=["GET"])
+@admin_only
+def editor_list():
+    from core.fork import album_tagging, editor, library_index
+
+    try:
+        path = editor.safe_path(request.args.get("path"))
+        if not os.path.isdir(path):
+            raise ValueError("Not a folder")
+        root = album_tagging.root_of(path)
+        return jsonify(success=True, path=path, root=root,
+                       parent=None if os.path.normpath(path) == os.path.normpath(root or "") else os.path.dirname(path),
+                       **library_index.listing(path))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/search", methods=["GET"])
+@admin_only
+def editor_search():
+    """``path`` given: only under that folder. Reads the index, never the disk."""
+    from core.fork import editor, library_index
+
+    try:
+        base = editor.safe_path(request.args.get("path")) if request.args.get("path") else None
+        return jsonify(success=True, **library_index.search(request.args.get("q") or "", base),
+                       index=library_index.status())
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/tags", methods=["POST"])
+@admin_only
+def editor_tags():
+    from core.fork import editor
+
+    files, errors = [], []
+    for raw in (_body().get("paths") or [])[:2000]:
+        try:
+            path = editor.safe_path(raw)
+            files.append(dict(editor.read_tags(path), path=path))
+        except Exception as exc:
+            errors.append(f"{os.path.basename(str(raw))}: {exc}")
+    return jsonify(success=True, files=files, errors=errors)
+
+
+@bp.route("/api/fork/editor/cover", methods=["GET"])
+@admin_only
+def editor_cover():
+    from flask import Response
+
+    from core.fork import editor
+
+    try:
+        cover = editor.cover_of(editor.safe_path(request.args.get("path")))
+    except Exception as exc:
+        return _editor_error(exc)
+    if not cover:
+        return jsonify(success=False, error="No cover in this file"), 404
+    return Response(cover[0], mimetype=cover[1], headers={"Cache-Control": "no-store"})
+
+
+@bp.route("/api/fork/editor/save", methods=["POST"])
+@admin_only
+def editor_save():
+    from core.fork import editor
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        result = editor.save_tags((body.get("paths") or [])[:2000], body.get("tags") or {},
+                                  body.get("cover") if isinstance(body.get("cover"), dict) else None,
+                                  db=get_database())
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+    return jsonify(success=True, **result)
+
+
+@bp.route("/api/fork/editor/rename", methods=["POST"])
+@admin_only
+def editor_rename():
+    from core.fork import editor
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        return jsonify(success=True, **editor.rename(body.get("path"), body.get("name"), db=get_database()))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/bulk-rename", methods=["POST"])
+@admin_only
+def editor_bulk_rename():
+    """Preview (default) or apply a find/replace over the names of ``paths``."""
+    from core.fork import editor
+    from database.music_database import get_database
+
+    body = _body()
+    try:
+        return jsonify(success=True, **editor.bulk_rename(
+            (body.get("paths") or [])[:5000], body.get("find"), body.get("replace"),
+            regex=bool(body.get("regex")), case_sensitive=bool(body.get("case_sensitive")),
+            apply=bool(body.get("apply")), db=get_database()))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)

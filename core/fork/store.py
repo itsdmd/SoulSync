@@ -336,6 +336,20 @@ def move_album_folders(old: str, new: str) -> int:
                             (new, time.time(), old)).rowcount
 
 
+def move_album_folders_under(old: str, new: str) -> int:
+    """A folder was renamed: saved folders at or below it follow."""
+    prefix = old.rstrip(os.sep) + os.sep
+    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    with connect() as conn:
+        moved = conn.execute("UPDATE fork_album_folders SET folder = ?, updated_at = ? WHERE folder = ?",
+                             (new, time.time(), old)).rowcount
+        moved += conn.execute(
+            "UPDATE fork_album_folders SET folder = ? || substr(folder, ?), updated_at = ? "
+            "WHERE folder LIKE ? ESCAPE '\\'",
+            (new.rstrip(os.sep) + os.sep, len(prefix) + 1, time.time(), like)).rowcount
+    return moved
+
+
 # ── album checks ────────────────────────────────────────────────────────
 # The last library analysis of an album (how many of its tracks are owned),
 # with a fingerprint of what it was computed from so it is only reused while

@@ -20,6 +20,8 @@
         ['lyrics.enabled', 'Translate CJK lyrics', ''],
         ['import.rename_only_auto', 'Automatic import: rename only',
             'The import watcher moves and renames files without changing their tags, artwork or audio. Also on the Import page settings.'],
+        ['import.copy_verify', 'Import folder: copy, verify, then delete',
+            'A file leaving the import folder is copied, the copy is compared with the original, and only then is the original deleted, along with the folders that leaves empty. Off: files are simply moved.'],
         ['albums.keep_ids_consistent', 'Keep album ids consistent within an album',
             'After tagging a track, copies the MusicBrainz release id between it and the tracks already in its album folder, so your media server does not show one album as two.'],
         ['artist_names.enabled', 'Apply artist name rules', ''],

@@ -1018,3 +1018,18 @@ def downsample_hires_flac(final_path, context, enabled=None):  # noqa: F811
     if isinstance(result, str) and result != final_path:
         _fork_hooks.move_lyrics_backup(final_path, result)
     return result
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A file leaving the import folder is copied, compared with the original and
+# only then deleted there, along with the sub-folders that leaves empty.
+# See core/fork/import_move.py.
+_upstream_safe_move_file = safe_move_file
+
+
+def safe_move_file(src, dst):  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+
+    if _fork_hooks.import_copy_verify(src, dst):
+        return
+    return _upstream_safe_move_file(src, dst)

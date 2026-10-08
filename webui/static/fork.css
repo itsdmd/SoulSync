@@ -533,3 +533,146 @@ select.fork-album-input option { background: #181818; }
 .fork-match-tools { display: flex; gap: 8px; margin-bottom: 8px; }
 .fork-match-tools .download-control-btn { padding: 5px 12px; font-size: 0.78rem; }
 .fork-discography-tools { justify-content: flex-end; margin-top: -6px; }
+
+/* ── Tag Editor page (fork-editor.js) ────────────────────────────────── */
+.fork-editor {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: flex;
+    flex-direction: column;
+    background: #0d0f12;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.85rem;
+}
+.fork-editor-dialog { z-index: 9100; }
+.fork-editor-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.fork-editor-head h2 { margin: 0; font-size: 1.05rem; }
+.fork-editor-index { flex: 1; color: rgba(255, 255, 255, 0.5); font-size: 0.78rem; }
+.fork-editor .download-control-btn { padding: 6px 14px; font-size: 0.8rem; min-width: 0; }
+.fork-editor-body { flex: 1; display: flex; min-height: 0; }
+.fork-editor-side {
+    width: 300px;
+    flex: none;
+    overflow: auto;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 0;
+}
+.fork-editor-node {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.fork-editor-node:hover { background: rgba(255, 255, 255, 0.05); }
+.fork-editor-node.current { background: rgba(29, 185, 84, 0.18); }
+.fork-editor-caret { width: 14px; flex: none; color: rgba(255, 255, 255, 0.5); text-align: center; }
+.fork-editor-nodename { overflow: hidden; text-overflow: ellipsis; }
+.fork-editor-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.fork-editor-search, .fork-editor-bar, .fork-editor-find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 0;
+}
+.fork-editor-find { padding: 0 0 10px; }
+.fork-editor-search .fork-album-input, .fork-editor-find .fork-album-input { flex: 1; }
+.fork-editor-mode.active { background: rgba(29, 185, 84, 0.25); border-color: rgba(29, 185, 84, 0.6); color: #fff; }
+.fork-editor-bar { padding-bottom: 8px; }
+.fork-editor-crumb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255, 255, 255, 0.6); }
+.fork-editor-crumb a { color: rgba(255, 255, 255, 0.85); text-decoration: none; }
+.fork-editor-crumb a:hover { text-decoration: underline; }
+.fork-editor-list {
+    flex: 1;
+    min-height: 120px;
+    overflow: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    outline: none;
+}
+.fork-editor-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 2.4fr) 1.5fr 1.2fr 1.2fr 60px 80px 100px;
+    gap: 10px;
+    padding: 4px 14px;
+    cursor: default;
+    user-select: none;
+}
+.fork-editor-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fork-editor-row:hover { background: rgba(255, 255, 255, 0.04); }
+.fork-editor-row.selected { background: rgba(29, 185, 84, 0.22); }
+.fork-editor-rowhead {
+    position: sticky;
+    top: 0;
+    background: #14171b;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    z-index: 1;
+}
+.fork-editor-rowhead:hover { background: #14171b; }
+.fork-editor-name small { display: block; color: rgba(255, 255, 255, 0.4); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; }
+.fork-editor-panel { display: flex; gap: 16px; padding: 12px 14px; height: 44vh; max-height: 430px; flex: none; }
+.fork-editor-cover { width: 170px; flex: none; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.fork-editor-cover small { color: rgba(255, 255, 255, 0.5); text-align: center; }
+.fork-editor-art {
+    width: 160px;
+    height: 160px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.4rem;
+    color: rgba(255, 255, 255, 0.25);
+    overflow: hidden;
+}
+.fork-editor-art.changed { border-color: #facc15; }
+.fork-editor-art img { width: 100%; height: 100%; object-fit: cover; }
+.fork-editor-coverbtns { display: flex; gap: 6px; align-items: center; }
+.fork-editor-check { display: flex; gap: 6px; align-items: center; font-size: 0.76rem; color: rgba(255, 255, 255, 0.7); }
+.fork-editor-tagbox { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.fork-editor-tags { flex: 1; overflow: auto; }
+.fork-editor-tag {
+    display: grid;
+    grid-template-columns: 110px 1fr 1fr 26px;
+    gap: 10px;
+    align-items: center;
+    padding: 2px 0;
+}
+.fork-editor-tag > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fork-editor-tag > span:first-child { color: rgba(255, 255, 255, 0.6); }
+.fork-editor-taghead { color: rgba(255, 255, 255, 0.5); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.fork-editor-tag .fork-album-input { padding: 4px 8px; width: 100%; }
+.fork-editor-tag.changed .fork-album-input { border-color: #facc15; }
+.fork-editor-tag.changed > span:first-child { color: #facc15; }
+.fork-editor-mixed { font-style: italic; color: rgba(255, 255, 255, 0.45); }
+.fork-editor-undo {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0 4px;
+}
+.fork-editor-undo:hover { color: #fff; }
+.fork-editor-rename { width: 520px; }
+.fork-editor-rename .fork-album-input { width: 100%; }
+.fork-editor-preview { max-height: 40vh; }
+.fork-editor-bad small { color: #f87171; }
+@media (max-width: 900px) {
+    .fork-editor-side { width: 180px; }
+    .fork-editor-row { grid-template-columns: minmax(160px, 2fr) 1.2fr 1fr 60px; }
+    .fork-editor-row > span:nth-child(n+5) { display: none; }
+    .fork-editor-panel { flex-direction: column; height: auto; max-height: 55vh; overflow: auto; }
+}
