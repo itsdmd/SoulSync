@@ -83,3 +83,35 @@ export async function forkDismissItems(items: DismissableItem[]): Promise<number
   if (payload.errors?.length) throw new Error(`Some were not dismissed: ${payload.errors[0]}`);
   return payload.dismissed ?? 0;
 }
+
+/**
+ * fork: manual import. The user edits the tags (and cover) of an entry's
+ * files in a dialog (webui/static/fork-import.js) and SoulSync files the
+ * tracks by them. The dialog announces FORK_IMPORT_CHANGED when the import
+ * folder changed, so the inbox reloads.
+ */
+export const FORK_IMPORT_CHANGED = 'fork:import-changed';
+
+interface ManualItem extends DismissableItem {
+  name: string;
+  files: { full_path: string }[];
+}
+
+export function forkCanManualImport(item: ManualItem): boolean {
+  return forkCanDismiss(item) && item.files.length > 0;
+}
+
+type ManualImportOpener = (options: { entries: { name: string; paths: string[] }[] }) => void;
+
+/** Opens the dialog for these entries, one after another; false when the fork's script is missing. */
+export function forkManualImport(items: ManualItem[]): boolean {
+  const open = (window as unknown as { forkManualImport?: ManualImportOpener }).forkManualImport;
+  if (typeof open !== 'function') return false;
+  open({
+    entries: items.map((item) => ({
+      name: item.name || item.folder_name,
+      paths: item.files.map((file) => file.full_path),
+    })),
+  });
+  return true;
+}

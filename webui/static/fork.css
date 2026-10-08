@@ -738,3 +738,28 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-tab:disabled { color: rgba(255, 255, 255, 0.25); cursor: default; }
 .fork-editor-tabpane[hidden] { display: none; }
 .fork-editor-tabpane > .fork-album-input { width: 100%; margin-bottom: 12px; }
+
+/* split view: one or two panes, each with its own folder */
+.fork-editor-bar .fork-album-status { flex: 1; }
+.fork-editor-panes { flex: 1; display: flex; min-height: 120px; border-top: 1px solid rgba(255, 255, 255, 0.08); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.fork-editor-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fork-editor-pane + .fork-editor-pane { border-left: 1px solid rgba(255, 255, 255, 0.14); }
+.fork-editor-pane .fork-editor-crumb { flex: none; padding: 6px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.fork-editor-pane .fork-editor-list { border: none; min-height: 0; }
+.fork-editor-panes.split .fork-editor-pane.active .fork-editor-crumb { background: rgba(29, 185, 84, 0.14); }
+.fork-editor-panes.split .fork-editor-row { grid-template-columns: 22px minmax(150px, 2.2fr) 1.3fr 1fr 44px; }
+.fork-editor-panes.split .fork-editor-row > span:nth-child(5),
+.fork-editor-panes.split .fork-editor-row > span:nth-child(n+7) { display: none; }
+
+/* ── manual import (fork-import.js) ──────────────────────────────────── */
+.fork-manual-dialog { width: 980px; max-width: 96vw; }
+.fork-manual-body { display: flex; flex-direction: column; gap: 14px; min-height: 120px; }
+.fork-manual-top { display: flex; gap: 18px; }
+.fork-manual-release { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; align-content: start; }
+.fork-manual-field { display: flex; flex-direction: column; gap: 3px; font-size: 0.74rem; color: rgba(255, 255, 255, 0.6); }
+.fork-manual-field .fork-album-input { width: 100%; }
+.fork-manual-files { max-height: 40vh; overflow: auto; }
+.fork-manual-row { display: grid; grid-template-columns: 70px 60px 2fr 1.5fr 1.4fr; gap: 8px; align-items: center; padding: 2px 0; }
+.fork-manual-row .fork-album-input { width: 100%; padding: 4px 8px; }
+.fork-manual-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255, 255, 255, 0.5); font-size: 0.76rem; }
+@media (max-width: 800px) { .fork-manual-top { flex-direction: column; } .fork-manual-release { grid-template-columns: 1fr; } }

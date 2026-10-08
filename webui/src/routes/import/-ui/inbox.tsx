@@ -26,7 +26,13 @@ import {
   toggleAutoImport,
   triggerAutoImportScan,
 } from '../-import.api';
-import { forkCanDismiss, forkDismissItems } from '../-import.fork';
+import {
+  FORK_IMPORT_CHANGED,
+  forkCanDismiss,
+  forkCanManualImport,
+  forkDismissItems,
+  forkManualImport,
+} from '../-import.fork';
 import { formatImportBytes } from '../-import.helpers';
 import {
   confidencePercent,
@@ -103,6 +109,15 @@ export function Inbox({
     void invalidateAutoImportQueries(queryClient);
   };
   const onError = (error: unknown) => window.showToast?.(getErrorMessage(error), 'error');
+  // fork: the manual import dialog changed what is in the import folder
+  useEffect(() => {
+    const onChanged = () => {
+      void invalidateImportStagingQueries(queryClient);
+      void invalidateAutoImportQueries(queryClient);
+    };
+    window.addEventListener(FORK_IMPORT_CHANGED, onChanged);
+    return () => window.removeEventListener(FORK_IMPORT_CHANGED, onChanged);
+  }, [queryClient]);
 
   const approve = useMutation({
     mutationFn: async (ids: number[]) => {
@@ -275,6 +290,8 @@ export function Inbox({
   );
   // fork: any selected entry can be dismissed, not only the identified ones
   const selectedDismissable = selectedItems.filter(forkCanDismiss);
+  // fork: tag the selected entries by hand and file them by those tags
+  const selectedManual = selectedItems.filter(forkCanManualImport);
   const selectable = visible.filter((item) => inboxActions(item).length > 0);
 
   return (
@@ -367,6 +384,18 @@ export function Inbox({
                 onClick={importSinglesFromTags}
               >
                 Import {selectedSingles.length} from tags
+              </Button>
+            ) : null}
+            {selectedManual.length > 0 ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                title="Edit the tags and cover yourself; the files are then named and filed by them"
+                onClick={() => {
+                  if (forkManualImport(selectedManual)) setSelected(new Set());
+                }}
+              >
+                Manual import {selectedManual.length}
               </Button>
             ) : null}
             {selectedDismissable.length > 0 ? (
@@ -840,6 +869,20 @@ function InboxRow({
               </Button>
             ) : (
               <ActionPlaceholder variant="primary" label="Identify" minWidth={86} />
+            )}
+            {/* fork: tag it yourself and let SoulSync file it by those tags */}
+            {forkCanManualImport(item) ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                title="Edit the tags and cover yourself; the files are then named and filed by them"
+                onClick={() => forkManualImport([item])}
+              >
+                Manual
+              </Button>
+            ) : (
+              <ActionPlaceholder variant="ghost" label="Manual" />
             )}
             {actions.includes('dismiss') ? (
               <Button variant="ghost" size="sm" disabled={busy} onClick={onDismiss}>

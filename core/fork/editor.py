@@ -43,15 +43,19 @@ MAX_COVER_BYTES = 20 * 1024 * 1024
 
 # ── paths ───────────────────────────────────────────────────────────────
 
-def safe_path(path: Any) -> str:
-    """A real path inside the library folders, or an error."""
+def safe_path(path: Any, roots: Optional[List[str]] = None) -> str:
+    """A real path inside the library folders (or inside ``roots`` when
+    given, for callers that work somewhere else), or an error."""
     from core.fork import album_tagging
 
     text = str(path or "").strip()
     if not text:
         raise ValueError("No path given")
     real = os.path.realpath(text)
-    if not album_tagging.root_of(real):
+    if roots is not None:
+        if not any(real == r or real.startswith(r.rstrip(os.sep) + os.sep) for r in roots if r):
+            raise PermissionError("That path is outside the allowed folders")
+    elif not album_tagging.root_of(real):
         raise PermissionError("That path is outside the library folders")
     if not os.path.exists(real):
         raise FileNotFoundError(f"Not found: {text}")
@@ -263,7 +267,7 @@ def _image_mime(data: bytes) -> str:
 
 
 def save_tags(paths: List[Any], changes: Dict[str, Any], cover: Optional[Dict[str, Any]] = None,
-              db: Any = None) -> Dict[str, Any]:
+              db: Any = None, roots: Optional[List[str]] = None) -> Dict[str, Any]:
     """Write ``changes`` (field -> new value; "" removes the tag) to every
     file of ``paths``, and set or remove the cover when asked. Fields not in
     ``changes`` are not touched."""
@@ -288,7 +292,7 @@ def save_tags(paths: List[Any], changes: Dict[str, Any], cover: Optional[Dict[st
     saved, errors, done = 0, [], []
     for raw in paths:
         try:
-            path = safe_path(raw)
+            path = safe_path(raw, roots)
             audio, kind = _open(path)
             if audio.tags is None:
                 audio.add_tags()
@@ -314,7 +318,8 @@ def save_tags(paths: List[Any], changes: Dict[str, Any], cover: Optional[Dict[st
                     fh.write(image[0])
             except OSError as exc:
                 errors.append(f"cover file in {os.path.basename(folder)}: {exc}")
-    library_index.touched(done)
+    if roots is None:
+        library_index.touched(done)
     if db is not None and done:
         _sync_library(db, done, changes)
     return {"saved": saved, "errors": errors}

@@ -681,3 +681,52 @@ def import_dismiss():
     from database.music_database import get_database
 
     return jsonify(success=True, **import_inbox.dismiss(get_database(), (_body().get("items") or [])[:2000]))
+
+
+@bp.route("/api/fork/import/manual/load", methods=["POST"])
+@admin_only
+def import_manual_load():
+    """Current tags of files in the import folder: the defaults of the manual import form."""
+    from core.fork import manual_import
+
+    return jsonify(success=True, **manual_import.load(_body().get("paths") or []))
+
+
+@bp.route("/api/fork/import/manual/cover", methods=["GET"])
+@admin_only
+def import_manual_cover():
+    from flask import Response
+
+    from core.fork import manual_import
+
+    try:
+        cover = manual_import.cover_of(request.args.get("path"))
+    except Exception as exc:
+        return _editor_error(exc)
+    if not cover:
+        return jsonify(success=False, error="No cover in this file"), 404
+    return Response(cover[0], mimetype=cover[1], headers={"Cache-Control": "no-store"})
+
+
+@bp.route("/api/fork/import/manual", methods=["POST"])
+@admin_only
+def import_manual():
+    """Write the tags the user confirmed, then file the tracks by them through
+    the normal import pipeline (rename only)."""
+    from api.import_routes import _build_import_route_runtime
+    from core.fork import manual_import
+    from core.imports.routes import album_process, invalidate_staging_scan_cache
+
+    body = _body()
+    runtime = _build_import_route_runtime()
+    try:
+        result = manual_import.run(body.get("files") or [], body.get("cover") if isinstance(body.get("cover"), dict) else None,
+                                   body.get("album_type"), lambda data: album_process(runtime, data))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+    finally:
+        try:
+            invalidate_staging_scan_cache()     # tags (and maybe files) changed under the page
+        except Exception as exc:
+            logger.debug("staging cache not invalidated: %s", exc)
+    return jsonify(success=True, **result)

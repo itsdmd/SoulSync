@@ -382,3 +382,58 @@ def test_any_import_entry_can_be_dismissed(tmp_path, monkeypatch):
     rows = conn.execute("SELECT folder_name, folder_hash, status, total_files FROM auto_import_history ORDER BY id").fetchall()
     conn.close()
     assert rows == [("Old", None, "rejected", 0), ("Drop", "h1", "rejected", 3)]
+
+
+def test_manual_import_writes_the_confirmed_tags_then_files_the_release(tmp_path, monkeypatch):
+    from core.fork import manual_import
+
+    root = tmp_path / "import"
+    monkeypatch.setattr(import_move, "staging_root", lambda: os.path.realpath(str(root)))
+    monkeypatch.setattr(tags, "_save", lambda audio: audio.save())
+    drop = os.path.join(os.path.realpath(str(root)), "Drop")
+    b = _flac(os.path.join(drop, "b.flac"), title="Bee", tracknumber=2)
+    a = _flac(os.path.join(drop, "a.flac"), title="Ay", artist="Someone", album="Rough", tracknumber=1)
+
+    loaded = manual_import.load([b, a, str(tmp_path / "outside.flac")])
+    assert [f["name"] for f in loaded["files"]] == ["a.flac", "b.flac"] and len(loaded["errors"]) == 1
+    assert loaded["files"][0]["tags"]["album"] == "Rough"
+
+    seen = {}
+
+    def process(data):
+        seen.update(data)
+        return {"success": True, "processed": len(data["matches"]), "total": len(data["matches"]), "errors": []}, 200
+
+    files = [{"path": a, "tags": {"title": "Ay!", "artist": "Me; You", "albumartist": "Me", "album": "Finished",
+                                 "date": "2024", "tracknumber": "1/2", "genre": "Folk"}, "length": 12.5},
+             {"path": b, "tags": {"title": "Bee", "artist": "Me", "albumartist": "Me", "album": "Finished",
+                                 "date": "2024", "tracknumber": "2/2"}}]
+    cover = {"action": "set", "data": base64.b64encode(_PNG).decode()}
+    out = manual_import.run(files, cover, "", process)
+    assert out == {"processed": 2, "total": 2, "errors": [], "album": "Finished", "artist": "Me"}
+    # the files carry what the user typed, cover included, before they are filed
+    audio = FLAC(a)
+    assert audio["title"] == ["Ay!"] and audio["artist"] == ["Me", "You"] and audio["album"] == ["Finished"]
+    assert audio["tracktotal"] == ["2"] and len(audio.pictures) == 1 and len(FLAC(b).pictures) == 1
+    # and the pipeline is handed a release made of those tags, to rename only
+    assert seen["rename_only"] is True and seen["album"]["name"] == "Finished" and seen["album"]["album_type"] == "album"
+    assert seen["album"]["artists"] == [{"name": "Me"}] and seen["album"]["total_tracks"] == 2
+    assert [(m["track"]["name"], m["track"]["track_number"], [x["name"] for x in m["track"]["artists"]])
+            for m in seen["matches"]] == [("Ay!", 1, ["Me", "You"]), ("Bee", 2, ["Me"])]
+    assert seen["matches"][0]["track"]["duration_ms"] == 12500
+
+    # one loose file without an album is a single named after its title
+    single = manual_import.build_release([{"path": a, "tags": {"title": "Solo", "artist": "Me"}}])
+    assert (single["album"]["name"], single["album"]["album_type"], single["album"]["artist"]) == ("Solo", "single", "Me")
+    assert manual_import.build_release([{"path": a, "tags": {"title": "S", "artist": "M"}}], "EP")["album"]["album_type"] == "ep"
+    # a form with a hole in it stops before anything is written or moved
+    for bad in ({"title": "", "artist": "Me", "album": "X"}, {"title": "T", "album": "X"}):
+        seen.clear()
+        with pytest.raises(ValueError):
+            manual_import.run([{"path": b, "tags": bad}], None, "", process)
+        assert seen == {} and FLAC(b)["title"] == ["Bee"]
+    with pytest.raises(PermissionError):
+        manual_import.run([{"path": str(tmp_path / "outside.flac"), "tags": {"title": "T", "artist": "A"}}], None, "", process)
+    with pytest.raises(ValueError, match="did not run"):
+        manual_import.run([{"path": b, "tags": {"title": "T", "artist": "A"}}], None, "",
+                          lambda data: ({"success": False}, 503))

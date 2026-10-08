@@ -53,14 +53,24 @@
     const ICONS = { dir: '📁', audio: '🎵', lyrics: '📝', image: '🖼️', other: '📄' };
 
     let page = null;      // the open page's state, or null
+    const PANE_KEYS = ['path', 'parent', 'items', 'selected', 'anchor', 'searching', 'truncated', 'query', 'loadSeq', 'listEl', 'crumbEl', 'allBox'];
 
     function open() {
         if (page) return;
         const s = page = {
-            roots: [], fields: [], path: '', parent: null, items: [], searching: false,
-            mode: 'global', selected: new Set(), anchor: null, tagData: null, edits: {}, cover: { action: 'keep' },
-            loadSeq: 0, tagSeq: 0, searchTimer: null, pollTimer: null,
+            roots: [], fields: [], panes: [], pane: null,
+            mode: 'global', tagData: null, edits: {}, cover: { action: 'keep' },
+            tagSeq: 0, searchTimer: null, pollTimer: null,
         };
+        // The list area is one pane, or two side by side (split view). Each
+        // pane has its own folder, selection and search; `s.path`, `s.items`,
+        // `s.selected`… always mean those of the ACTIVE pane.
+        for (const key of PANE_KEYS) {
+            Object.defineProperty(s, key, { get: () => s.pane[key], set: (value) => { s.pane[key] = value; } });
+        }
+        s.pane = makePane();
+        s.panes = [s.pane];
+        s.pane.el.classList.add('active');
 
         // ── skeleton ─────────────────────────────────────────────────────
         s.indexEl = el('span', { class: 'fork-editor-index' });
@@ -85,7 +95,6 @@
             modeBtn('global', 'Entire library', 'Search every folder of the library'),
             modeBtn('local', 'This folder', 'Search only the folder that is open, and the folders inside it'),
         ];
-        s.crumbEl = el('div', { class: 'fork-editor-crumb' });
         s.countEl = el('span', { class: 'fork-album-status' });
         const act = (text, title, fn) => el('button', { class: 'download-control-btn secondary', type: 'button', text, title, disabled: true, onclick: fn });
         s.btns = {
@@ -96,13 +105,10 @@
             del: act('Delete', 'Delete the selected items for good (Delete)', () => confirmDelete(picks())),
             rename: act('Rename…', 'Rename the selection: a new name, or find and replace (F2)', () => openRename()),
         };
-        s.listEl = el('div', { class: 'fork-editor-list', tabindex: '0', onkeydown: onListKey });
-        // dropping on the empty part of the list moves into the open folder
-        dropTarget(s.listEl, () => (s.searching ? '' : s.path));
-        s.listEl.addEventListener('contextmenu', (e) => {
-            if (e.target.closest('.fork-editor-row:not(.fork-editor-rowhead)')) return;   // rows have their own
-            e.preventDefault();
-            if (!s.searching) showMenu(e, [{ label: 'Paste', disabled: !s.clip, fn: () => paste(s.path) }]);
+        s.panesEl = el('div', { class: 'fork-editor-panes' }, [s.pane.el]);
+        s.splitBtn = el('button', {
+            class: 'download-control-btn secondary fork-editor-mode', type: 'button', text: 'Split view',
+            title: 'Show two folders side by side, to drag files and folders between them', onclick: toggleSplit,
         });
         s.coverEl = el('div', { class: 'fork-editor-cover' });
         s.tagsEl = el('div', { class: 'fork-editor-tags' });
@@ -123,9 +129,9 @@
                     s.treeEl, s.treeHitsEl,
                 ]),
                 el('div', { class: 'fork-editor-main' }, [
-                    el('div', { class: 'fork-editor-search' }, [s.searchEl, ...s.modeBtns]),
-                    el('div', { class: 'fork-editor-bar' }, [s.crumbEl, s.countEl, ...Object.values(s.btns)]),
-                    s.listEl,
+                    el('div', { class: 'fork-editor-search' }, [s.searchEl, ...s.modeBtns, s.splitBtn]),
+                    el('div', { class: 'fork-editor-bar' }, [s.countEl, ...Object.values(s.btns)]),
+                    s.panesEl,
                     el('div', { class: 'fork-editor-panel' }, [
                         s.coverEl,
                         el('div', { class: 'fork-editor-tagbox' }, [
@@ -385,6 +391,61 @@
         go.focus();
     }
 
+    // ── panes (split view) ───────────────────────────────────────────────
+
+    function makePane() {
+        const pane = { path: '', parent: null, items: [], selected: new Set(), anchor: null, searching: false, truncated: false, query: '', loadSeq: 0, allBox: null };
+        pane.crumbEl = el('div', { class: 'fork-editor-crumb' });
+        pane.listEl = el('div', { class: 'fork-editor-list', tabindex: '0', onkeydown: onListKey });
+        // dropping on the empty part of a list moves into the folder it shows
+        dropTarget(pane.listEl, () => (pane.searching ? '' : pane.path));
+        pane.listEl.addEventListener('contextmenu', (e) => {
+            if (e.target.closest('.fork-editor-row:not(.fork-editor-rowhead)')) return;   // rows have their own
+            e.preventDefault();
+            if (!pane.searching) showMenu(e, [{ label: 'Paste', disabled: !page.clip, fn: () => paste(pane.path) }]);
+        });
+        pane.el = el('div', { class: 'fork-editor-pane' }, [pane.crumbEl, pane.listEl]);
+        // whatever is done in a pane is done to that pane: make it the active one first
+        for (const type of ['mousedown', 'contextmenu', 'focusin']) {
+            pane.el.addEventListener(type, (e) => {
+                if (!activate(pane) && type !== 'focusin') { e.preventDefault(); e.stopPropagation(); }
+            }, true);
+        }
+        return pane;
+    }
+
+    // The search box, the buttons and the tag editor follow the active pane.
+    // Refused while there are unsaved tag edits (they belong to the other one).
+    function activate(pane) {
+        const s = page;
+        if (!s || pane === s.pane) return true;
+        if (blocked()) return false;
+        s.pane = pane;
+        for (const other of s.panes) other.el.classList.toggle('active', other === pane);
+        s.searchEl.value = pane.query || '';
+        selectionChanged();
+        if (!pane.searching && pane.path) reveal(pane.path);
+        return true;
+    }
+
+    function toggleSplit() {
+        const s = page;
+        if (!s) return;
+        if (s.panes.length === 1) {
+            const second = makePane();
+            s.panes.push(second);
+            s.panesEl.append(second.el);
+            navigate(s.pane.path, null, second);
+        } else {
+            if (s.pane !== s.panes[0] && !activate(s.panes[0])) return;
+            s.panes.pop().el.remove();
+        }
+        const split = s.panes.length > 1;
+        s.panesEl.classList.toggle('split', split);
+        s.splitBtn.classList.toggle('active', split);
+        s.splitBtn.textContent = split ? 'Single view' : 'Split view';
+    }
+
     // ── folder contents ──────────────────────────────────────────────────
 
     async function start() {
@@ -412,64 +473,68 @@
         return true;
     }
 
-    async function navigate(path, selectPath) {
+    async function navigate(path, selectPath, pane) {
         const s = page;
         if (!s || blocked()) return;
-        const seq = ++s.loadSeq;
-        s.searchEl.value = '';
-        s.searching = false;
+        pane = pane || s.pane;
+        const seq = ++pane.loadSeq;
+        pane.query = '';
+        if (pane === s.pane) s.searchEl.value = '';
+        pane.searching = false;
         try {
             const data = await api('/list' + q({ path }));
-            if (page !== s || seq !== s.loadSeq) return;
-            s.path = data.path;
-            s.parent = data.parent;
-            s.items = data.dirs.concat(data.files);
-            s.selected = new Set(selectPath && s.items.some((i) => i.path === selectPath) ? [selectPath] : []);
-            s.anchor = selectPath || null;
-            paintCrumb();
-            paintList();
-            selectionChanged();
-            reveal(s.path);
+            if (page !== s || seq !== pane.loadSeq) return;
+            pane.path = data.path;
+            pane.parent = data.parent;
+            pane.items = data.dirs.concat(data.files);
+            pane.selected = new Set(selectPath && pane.items.some((i) => i.path === selectPath) ? [selectPath] : []);
+            pane.anchor = selectPath || null;
+            paintCrumb(pane);
+            paintList(pane);
+            if (pane === s.pane) { selectionChanged(); reveal(pane.path); }
         } catch (err) { toast(err.message, 'error'); }
     }
 
-    async function reload() {
+    async function reload(pane) {
         const s = page;
         if (!s) return;
-        if (s.searching) return runSearch(true);
-        const keep = new Set(s.selected);
+        pane = pane || s.pane;
+        if (pane.searching) return runSearch(true, pane);
+        const keep = new Set(pane.selected);
         try {
-            const data = await api('/list' + q({ path: s.path }));
+            const data = await api('/list' + q({ path: pane.path }));
             if (page !== s) return;
-            s.items = data.dirs.concat(data.files);
-            s.selected = new Set(s.items.filter((i) => keep.has(i.path)).map((i) => i.path));
-            paintList();
-            selectionChanged(true);
+            pane.items = data.dirs.concat(data.files);
+            pane.selected = new Set(pane.items.filter((i) => keep.has(i.path)).map((i) => i.path));
+            paintList(pane);
+            if (pane === s.pane) selectionChanged(true);
         } catch (err) { toast(err.message, 'error'); }
     }
 
-    async function runSearch(keepSelection) {
+    async function runSearch(keepSelection, pane) {
         const s = page;
         if (!s) return;
-        const text = s.searchEl.value.trim();
-        if (!text) { if (s.searching) { s.searching = false; navigate(s.path); } return; }
+        pane = pane || s.pane;
+        const text = (pane === s.pane ? s.searchEl.value : pane.query).trim();
+        pane.query = text;
+        if (!text) { if (pane.searching) { pane.searching = false; navigate(pane.path, null, pane); } return; }
         if (!keepSelection && blocked()) return;
-        const seq = ++s.loadSeq;
+        const seq = ++pane.loadSeq;
         try {
             const params = { q: text };
-            if (s.mode === 'local') params.path = s.path;
+            if (s.mode === 'local') params.path = pane.path;
             const data = await api('/search' + q(params));
-            if (page !== s || seq !== s.loadSeq) return;
-            const keep = keepSelection ? new Set(s.selected) : new Set();
-            s.searching = true;
-            s.items = data.dirs.concat(data.files);
-            s.truncated = !!data.truncated;
-            s.selected = new Set(s.items.filter((i) => keep.has(i.path)).map((i) => i.path));
-            s.anchor = null;
+            if (page !== s || seq !== pane.loadSeq) return;
+            const keep = keepSelection ? new Set(pane.selected) : new Set();
+            pane.searching = true;
+            pane.items = data.dirs.concat(data.files);
+            pane.truncated = !!data.truncated;
+            pane.selected = new Set(pane.items.filter((i) => keep.has(i.path)).map((i) => i.path));
+            pane.anchor = null;
             paintIndex(data.index);
-            paintCrumb();
-            paintList();
-            selectionChanged(keepSelection);
+            paintCrumb(pane);
+            paintList(pane);
+            if (pane === s.pane) selectionChanged(keepSelection);
         } catch (err) { toast(err.message, 'error'); }
     }
 
@@ -477,49 +542,51 @@
         for (const b of page.modeBtns) b.classList.toggle('active', b.dataset.mode === page.mode);
     }
 
-    function paintCrumb() {
+    function paintCrumb(pane) {
         const s = page;
-        if (s.searching) {
-            const where = s.mode === 'local' ? `in ${s.path}` : 'in the entire library';
-            s.crumbEl.replaceChildren(el('span', { text: `Results ${where}${s.truncated ? ' (first matches only)' : ''}` }));
+        pane = pane || s.pane;
+        if (pane.searching) {
+            const where = s.mode === 'local' ? `in ${pane.path}` : 'in the entire library';
+            pane.crumbEl.replaceChildren(el('span', { text: `Results ${where}${pane.truncated ? ' (first matches only)' : ''}` }));
             return;
         }
-        const root = s.roots.map((r) => r.path).filter((r) => s.path === r || s.path.startsWith(r.replace(/\/+$/, '') + '/'))
+        const root = s.roots.map((r) => r.path).filter((r) => pane.path === r || pane.path.startsWith(r.replace(/\/+$/, '') + '/'))
             .sort((a, b) => b.length - a.length)[0] || '';
-        const parts = [el('a', { href: '#', text: root, onclick: (e) => { e.preventDefault(); navigate(root); } })];
+        const parts = [el('a', { href: '#', text: root, onclick: (e) => { e.preventDefault(); navigate(root, null, pane); } })];
         let acc = root.replace(/\/+$/, '');
-        for (const name of s.path.slice(root.length).split('/').filter(Boolean)) {
+        for (const name of pane.path.slice(root.length).split('/').filter(Boolean)) {
             acc += '/' + name;
             const target = acc;
-            parts.push(el('span', { text: ' / ' }), el('a', { href: '#', text: name, onclick: (e) => { e.preventDefault(); navigate(target); } }));
+            parts.push(el('span', { text: ' / ' }), el('a', { href: '#', text: name, onclick: (e) => { e.preventDefault(); navigate(target, null, pane); } }));
         }
-        s.crumbEl.replaceChildren(...parts);
+        pane.crumbEl.replaceChildren(...parts);
     }
 
-    function paintList() {
+    function paintList(pane) {
         const s = page;
-        s.allBox = el('input', {
+        pane = pane || s.pane;
+        pane.allBox = el('input', {
             type: 'checkbox', 'aria-label': 'Select everything', title: 'Select all / none',
-            onchange: () => { if (blocked()) { paintChecks(); return; } s.selected = new Set(s.allBox.checked ? s.items.map((i) => i.path) : []); paintChecks(); selectionChanged(); },
+            onchange: () => { if (blocked()) { paintChecks(pane); return; } pane.selected = new Set(pane.allBox.checked ? pane.items.map((i) => i.path) : []); paintChecks(pane); selectionChanged(); },
         });
-        const head = el('div', { class: 'fork-editor-row fork-editor-rowhead' }, [el('span', {}, s.allBox), ...['Name', 'Title', 'Artist', 'Album', '#', 'Size', 'Modified'].map((t) => el('span', { text: t }))]);
+        const head = el('div', { class: 'fork-editor-row fork-editor-rowhead' }, [el('span', {}, pane.allBox), ...['Name', 'Title', 'Artist', 'Album', '#', 'Size', 'Modified'].map((t) => el('span', { text: t }))]);
         const rows = [];
-        if (!s.searching && s.parent) {
-            const up = el('div', { class: 'fork-editor-row', ondblclick: () => navigate(s.parent), title: 'Up one folder' },
+        if (!pane.searching && pane.parent) {
+            const up = el('div', { class: 'fork-editor-row', ondblclick: () => navigate(pane.parent, null, pane), title: 'Up one folder' },
                 [el('span'), el('span', { text: '📁 ..' }), ...Array.from({ length: 6 }, () => el('span'))]);
-            dropTarget(up, () => s.parent);
+            dropTarget(up, () => pane.parent);
             rows.push(up);
         }
-        for (const item of s.items) {
-            const where = s.searching ? item.path.slice(0, item.path.length - item.name.length - 1) : '';
+        for (const item of pane.items) {
+            const where = pane.searching ? item.path.slice(0, item.path.length - item.name.length - 1) : '';
             item.box = el('input', {
                 type: 'checkbox', 'aria-label': `Select ${item.name}`,
                 onclick: (e) => e.stopPropagation(),            // ticking never replaces the selection
                 ondblclick: (e) => e.stopPropagation(),
                 onchange: () => {
                     if (blocked()) { paintChecks(); return; }
-                    if (item.box.checked) s.selected.add(item.path); else s.selected.delete(item.path);
-                    s.anchor = item.path;
+                    if (item.box.checked) pane.selected.add(item.path); else pane.selected.delete(item.path);
+                    pane.anchor = item.path;
                     paintChecks();
                     selectionChanged();
                 },
@@ -528,7 +595,7 @@
                 class: 'fork-editor-row', title: item.path,
                 onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },   // no text selection on shift+click
                 onclick: (e) => clickRow(item, e),
-                ondblclick: () => (item.kind === 'dir' ? navigate(item.path) : s.searching ? navigate(where, item.path) : null),
+                ondblclick: () => (item.kind === 'dir' ? navigate(item.path) : pane.searching ? navigate(where, item.path) : null),
                 oncontextmenu: (e) => rowMenu(item, where, e),
             }, [
                 el('span', { class: 'fork-editor-tick' }, item.box),
@@ -538,29 +605,30 @@
                 el('span', { text: item.kind === 'dir' ? '' : sizeText(item.size || 0) }),
                 el('span', { text: item.kind === 'dir' ? '' : dateText(item.mtime) }),
             ]);
-            dragSource(row, () => (s.selected.has(item.path) ? chosen().map((i) => i.path) : [item.path]));
+            dragSource(row, () => (pane.selected.has(item.path) ? chosen().map((i) => i.path) : [item.path]));
             if (item.kind === 'dir') dropTarget(row, () => item.path);
             item.row = row;
             rows.push(row);
         }
-        if (!s.items.length) rows.push(el('div', { class: 'fork-album-note', text: s.searching ? 'Nothing found.' : 'This folder is empty.' }));
-        s.listEl.replaceChildren(head, ...rows);
-        paintChecks();
+        if (!pane.items.length) rows.push(el('div', { class: 'fork-album-note', text: pane.searching ? 'Nothing found.' : 'This folder is empty.' }));
+        pane.listEl.replaceChildren(head, ...rows);
+        paintChecks(pane);
     }
 
     // Rows, their tick boxes and the header box follow the selection (and
     // cut items are dimmed until they are pasted).
-    function paintChecks() {
+    function paintChecks(pane) {
         const s = page;
+        pane = pane || s.pane;
         const cut = s.clip && s.clip.mode === 'cut' ? new Set(s.clip.items.map((i) => i.path)) : null;
-        for (const i of s.items) {
-            const on = s.selected.has(i.path);
+        for (const i of pane.items) {
+            const on = pane.selected.has(i.path);
             if (i.row) { i.row.classList.toggle('selected', on); i.row.classList.toggle('cut', !!cut && cut.has(i.path)); }
             if (i.box) i.box.checked = on;
         }
-        if (s.allBox) {
-            s.allBox.checked = s.items.length > 0 && s.selected.size >= s.items.length;
-            s.allBox.indeterminate = s.selected.size > 0 && s.selected.size < s.items.length;
+        if (pane.allBox) {
+            pane.allBox.checked = pane.items.length > 0 && pane.selected.size >= pane.items.length;
+            pane.allBox.indeterminate = pane.selected.size > 0 && pane.selected.size < pane.items.length;
         }
     }
 
@@ -801,7 +869,7 @@
             toast(err.message, 'error');
         }
         s.saving = false;
-        if (page === s) { paintActions(); await reload(); }
+        if (page === s) { paintActions(); for (const pane of s.panes) await reload(pane); }
     }
 
     // ── renaming ─────────────────────────────────────────────────────────
@@ -830,8 +898,10 @@
         for (const folder of new Set(folders)) await refreshTree(folder);
         if (page !== s) return;
         if (s.treeFilterEl.value.trim()) filterTree();
-        if ((gone || []).some((p) => inside(s.path, p))) navigate(fallback || parentOf(gone[0]));
-        else await reload();
+        for (const pane of s.panes) {
+            if ((gone || []).some((p) => inside(pane.path, p))) await navigate(fallback || parentOf(gone[0]), null, pane);
+            else await reload(pane);
+        }
     }
 
     // ── right-click menu ─────────────────────────────────────────────────
