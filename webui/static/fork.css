@@ -764,3 +764,32 @@ select.fork-album-input option { background: #181818; }
 .fork-manual-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255, 255, 255, 0.5); font-size: 0.76rem; }
 @media (max-width: 800px) { .fork-manual-top { flex-direction: column; } .fork-manual-release { grid-template-columns: 1fr; } }
 .fork-manual-dialog .fork-editor-coverbtns .download-control-btn { padding: 5px 10px; font-size: 0.76rem; min-width: 0; }
+
+/* Tag Editor: only the rows in view are built (see virtual() in fork-editor.js) */
+.fork-editor-tree, .fork-editor-list { position: relative; }
+.fork-editor-spacer { position: relative; }
+.fork-editor-spacer > * { position: absolute; left: 0; right: 0; box-sizing: border-box; }
+.fork-editor-spacer > .fork-editor-row { align-items: center; padding-top: 0; padding-bottom: 0; }
+.fork-editor-spacer > .fork-editor-node { padding-top: 0; padding-bottom: 0; }
+.fork-editor-treefilter { display: flex; gap: 6px; align-items: center; }
+.fork-editor-treefilter .fork-album-input { flex: 1; min-width: 0; }
+.fork-editor .fork-editor-locate { padding: 6px 8px; display: flex; align-items: center; flex: none; }
+.fork-editor-located { animation: fork-editor-located 1.4s ease-out; }
+@keyframes fork-editor-located {
+    0%, 40% { box-shadow: inset 0 0 0 2px #facc15; }
+    100% { box-shadow: inset 0 0 0 2px transparent; }
+}
+/* Tag Editor: every tag of the file */
+.fork-editor-tag { grid-template-columns: 170px 1fr 1fr 26px; }
+.fork-editor-tagsep {
+    margin: 10px 0 4px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.fork-editor-othertag > span:first-child { font-size: 0.74rem; letter-spacing: 0.02em; }
+.fork-editor-tag textarea.fork-album-input { resize: vertical; min-height: 54px; font-family: inherit; }
+.fork-editor-tag .fork-album-input:disabled { opacity: 0.5; cursor: not-allowed; }

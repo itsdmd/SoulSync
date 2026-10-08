@@ -110,7 +110,7 @@ def test_only_changed_tags_are_written_and_values_keep_their_shape(lib):
     one, two = (os.path.join(lib, "Artist", "Album", n) for n in ("01 - One.flac", "02 - Two.flac"))
     assert editor.read_tags(one)["tags"]["artist"] == "A; B" and editor.read_tags(one)["tags"]["tracknumber"] == "1/9"
     out = editor.save_tags([one, two], {"album": "New Album", "genre": "Rock; Pop", "discnumber": "1/2",
-                                        "date": "", "nonsense": "x"})
+                                        "date": ""})
     assert out == {"saved": 2, "errors": []}
     for path, title in ((one, "One"), (two, "Two")):
         audio = FLAC(path)
@@ -143,6 +143,52 @@ def test_mp3_tags_and_cover(lib):
     assert read["tags"]["title"] == "Three" and read["tags"]["artist"] == "A; B"
     assert read["tags"]["tracknumber"] == "3/9" and read["tags"]["comment"] == "hi"
     assert read["cover"]["mime"] == "image/jpeg" and editor.cover_of(path)[0] == _JPEG
+
+
+def test_every_tag_of_a_file_is_listed_and_the_text_ones_can_be_edited(lib):
+    from mutagen.id3 import COMM, PRIV, TBPM, TIT2, TXXX, USLT
+
+    one = os.path.join(lib, "Artist", "Album", "01 - One.flac")
+    audio = FLAC(one)
+    audio["mood"] = ["Calm"]
+    audio["MusicBrainz_TrackId"] = ["abc"]
+    audio["performer"] = ["X", "Y"]
+    audio.save()
+    read = editor.read_tags(one)
+    assert read["tags"]["MOOD"] == "Calm" and read["tags"]["MUSICBRAINZ_TRACKID"] == "abc"
+    assert read["tags"]["PERFORMER"] == "X; Y" and read["readonly"] == []
+    assert "TRACKTOTAL" not in read["tags"] and read["tags"]["title"] == "One"     # shown by its own field
+    out = editor.save_tags([one], {"MOOD": "Dark; Slow", "PERFORMER": "Z; W", "MUSICBRAINZ_TRACKID": "",
+                                   "isrc": "QM1"})
+    assert out == {"saved": 1, "errors": []}
+    audio = FLAC(one)
+    assert audio["mood"] == ["Dark; Slow"]                    # one value stays one value
+    assert audio["performer"] == ["Z", "W"]                   # several stay several
+    assert "musicbrainz_trackid" not in audio and audio["isrc"] == ["QM1"] and audio["title"] == ["One"]
+    assert editor.save_tags([one], {"BAD=NAME": "x"})["saved"] == 0
+
+    mp3 = os.path.join(lib, "Artist", "Album", "03.mp3")
+    with open(mp3, "wb") as fh:
+        fh.write((b"\xff\xfb\x90\x00" + b"\x00" * 413) * 8)
+    id3 = ID3()
+    for frame in (TIT2(encoding=3, text=["T"]), TBPM(encoding=3, text=["120"]),
+                  TXXX(encoding=3, desc="Mood", text=["Calm"]), USLT(encoding=3, lang="eng", desc="", text="la\nla"),
+                  COMM(encoding=3, lang="eng", desc="", text=["first"]),
+                  COMM(encoding=3, lang="eng", desc="note", text=["second"]), PRIV(owner="x", data=b"12345")):
+        id3.add(frame)
+    id3.save(mp3)
+    read = editor.read_tags(mp3)
+    assert read["tags"]["BPM"] == "120" and read["tags"]["MOOD"] == "Calm" and read["tags"]["LYRICS"] == "la\nla"
+    assert read["tags"]["comment"] == "first" and read["tags"]["COMM:note:eng"] == "second"
+    assert sorted(read["readonly"]) == ["COMM:note:eng", "PRIV:x:12345"]
+    out = editor.save_tags([mp3], {"BPM": "98", "MOOD": "Dark", "LYRICS": "", "ISRC": "QM2", "CUSTOM": "c",
+                                   "comment": "changed"})
+    assert out == {"saved": 1, "errors": []}
+    id3 = ID3(mp3)
+    assert id3["TBPM"].text == ["98"] and id3["TXXX:Mood"].text == ["Dark"] and not id3.getall("USLT")
+    assert id3["TSRC"].text == ["QM2"] and id3["TXXX:CUSTOM"].text == ["c"]
+    assert sorted(str(c.text[0]) for c in id3.getall("COMM")) == ["changed", "second"]    # the other comment stays
+    assert id3.getall("PRIV")
 
 
 def test_cover_is_set_replaced_and_removed(lib):

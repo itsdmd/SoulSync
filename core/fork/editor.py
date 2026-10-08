@@ -142,7 +142,9 @@ def _write_field(audio: Any, kind: str, field: str, value: str) -> None:
         _pair(values[0])  # validates
     if kind == "id3":
         if frame == "COMM":
-            audio.tags.delall("COMM")
+            shown = audio.tags.getall("COMM")[:1]
+            for comment in shown:                    # other comments are tags of their own
+                audio.tags.delall(comment.HashKey)
             if values:
                 audio.tags.add(id3.COMM(encoding=3, lang="eng", desc="", text=values))
             return
@@ -197,7 +199,12 @@ def _pictures(audio: Any, kind: str) -> List[Tuple[bytes, str]]:
 
 
 def read_tags(path: str) -> Dict[str, Any]:
-    """``{"tags": {field: value}, "cover": {...} | None, "format": ...}``."""
+    """``{"tags": {name: value}, "readonly": [...], "cover": {...} | None,
+    "format": ...}``. ``tags`` holds the fixed fields (lower-case names) and
+    then every other tag of the file (upper-case names, see
+    :mod:`core.fork.all_tags`); ``readonly`` names the ones that are not text."""
+    from core.fork import all_tags
+
     audio, kind = _open(path)
     pictures = _pictures(audio, kind)
     cover = None
@@ -205,7 +212,10 @@ def read_tags(path: str) -> Dict[str, Any]:
         data, mime = pictures[0]
         cover = {"hash": hashlib.sha1(data).hexdigest()[:16], "size": len(data), "mime": mime}
     info = getattr(audio, "info", None)
-    return {"tags": {name: _read_field(audio, kind, name) for name, *_rest in FIELDS}, "cover": cover,
+    found = {name: _read_field(audio, kind, name) for name, *_rest in FIELDS}
+    extra, readonly = all_tags.read(audio, kind)     # everything else the file carries
+    found.update(extra)
+    return {"tags": found, "readonly": readonly, "cover": cover,
             "format": kind, "length": round(float(getattr(info, "length", 0) or 0), 1),
             "bitrate": int(getattr(info, "bitrate", 0) or 0)}
 
@@ -268,12 +278,14 @@ def _image_mime(data: bytes) -> str:
 
 def save_tags(paths: List[Any], changes: Dict[str, Any], cover: Optional[Dict[str, Any]] = None,
               db: Any = None, roots: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Write ``changes`` (field -> new value; "" removes the tag) to every
-    file of ``paths``, and set or remove the cover when asked. Fields not in
-    ``changes`` are not touched."""
-    from core.fork import library_index, tags
+    """Write ``changes`` (name -> new value; "" removes the tag) to every
+    file of ``paths``, and set or remove the cover when asked. Tags not in
+    ``changes`` are not touched. A name that is not a fixed field is any
+    other tag of the file, by its upper-case name."""
+    from core.fork import all_tags, library_index, tags
 
-    changes = {k: str(v if v is not None else "") for k, v in (changes or {}).items() if k in _BY_NAME}
+    changes = {(k if k in _BY_NAME else str(k).strip().upper()): str(v if v is not None else "")
+               for k, v in (changes or {}).items() if str(k).strip()}
     action = str((cover or {}).get("action") or "keep")
     image: Optional[Tuple[bytes, str]] = None
     if action == "set":
@@ -297,7 +309,10 @@ def save_tags(paths: List[Any], changes: Dict[str, Any], cover: Optional[Dict[st
             if audio.tags is None:
                 audio.add_tags()
             for field, value in changes.items():
-                _write_field(audio, kind, field, value)
+                if field in _BY_NAME:
+                    _write_field(audio, kind, field, value)
+                else:
+                    all_tags.write(audio, kind, field, value)
             if image:
                 _set_cover(audio, kind, *image)
             elif action == "remove":
@@ -592,6 +607,7 @@ def delete(paths: List[Any], db: Any = None) -> Dict[str, Any]:
 
     deleted: List[str] = []
     errors: List[str] = []
+    parents: set = set()
     # a folder first: its contents need no deleting of their own afterwards
     for raw in sorted({str(p) for p in paths}, key=len):
         name = os.path.basename(raw.rstrip(os.sep))
@@ -615,15 +631,17 @@ def delete(paths: List[Any], db: Any = None) -> Dict[str, Any]:
             _forget_library(db, path, is_dir)
             if is_dir:
                 library_index.forget(path)
-                try:
-                    library_index.scan_dir(os.path.dirname(path))
-                except FileNotFoundError:
-                    pass
+                parents.add(os.path.dirname(path))
             else:
                 library_index.moved(path, "", False)
             deleted.append(path)
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+    for parent in parents:                           # once each, however many folders went
+        try:
+            library_index.scan_dir(parent)
+        except FileNotFoundError:
+            pass
     return {"deleted": deleted, "errors": errors}
 
 
