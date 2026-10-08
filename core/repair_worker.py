@@ -6458,6 +6458,7 @@ FINDING_TYPE_META.update({
 JOB_CATEGORIES.update({
     'fork_auto_translate': 'Tags & metadata',
     'fork_volume_grouping': 'Tags & metadata',
+    'fork_rating_sync': 'Tags & metadata',
 })
 _upstream_fix_handlers = RepairWorker._fix_handlers
 

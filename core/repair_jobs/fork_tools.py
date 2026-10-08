@@ -5,6 +5,8 @@
   call), and applies the result to the files.
 * **Album Volume Grouping** — finds albums released as "…, Vol. 1", "…, Vol. 2"
   and turns each set into ONE album whose volumes are its discs.
+* **Rating Tag Sync** — copies star ratings between Navidrome and the rating
+  tag in the files (``core/fork/rating_sync.py``).
 
 Only the job classes live here, because this folder is where the framework
 (and its consistency tests) look for jobs; the work is in ``core/fork/jobs.py``.
@@ -13,7 +15,7 @@ default) or applies them straight away; a finding's fix does the same work for
 one item. See FORK.md.
 """
 
-from core.fork import jobs, translate
+from core.fork import jobs, rating_sync, translate
 from core.fork.cjk import fold
 from core.fork.jobs import is_on, job_settings
 from core.repair_jobs import register_job
@@ -223,3 +225,54 @@ class VolumeGroupingJob(RepairJob):
             if context.update_progress:
                 context.update_progress(index, len(groups))
         return result
+
+
+@register_job
+class RatingTagSyncJob(RepairJob):
+    job_id = 'fork_rating_sync'
+    display_name = "Rating Tag Sync"
+    description = "Copies star ratings between Navidrome and the rating tag in your files"
+    help_text = (
+        "Navidrome keeps your star ratings in its own database and never writes them to the files, "
+        "so they are lost with that database and no other player sees them. This tool copies them "
+        "one way, for every track of the library that came from Navidrome.\n\n"
+        "The rating is written where other players look for it: a POPM frame in MP3 (1, 64, 128, "
+        "196, 255 for 1–5 stars), a RATING tag in FLAC / Ogg / Opus and a RATING atom in M4A "
+        "(20, 40, 60, 80, 100). Ratings written by other players on other scales are understood "
+        "when reading. Only a rating that differs is written; nothing else in the file changes.\n\n"
+        "Ratings are those of the Navidrome account SoulSync is connected with. Files are found "
+        "through the library's paths, so Navidrome must report real paths. The tool changes things "
+        "itself on every run; there is nothing to approve.\n\n"
+        "Settings:\n"
+        "- Direction: navidrome_to_file (default) writes Navidrome's rating into the file; "
+        "file_to_navidrome sets Navidrome's rating from the file's tag\n"
+        "- Clear Unrated: off (default), a track with no rating on the source side is left alone. "
+        "On, its rating is removed on the other side too, so both always agree\n"
+        "- Dry Run: only list in the log what would change"
+    )
+    icon = "repair-icon-tag"
+    default_enabled = False
+    default_interval_hours = 168
+    default_settings = {
+        "direction": rating_sync.NAVIDROME_TO_FILE,
+        "clear_unrated": False,
+        "dry_run": False,
+    }
+    setting_options = {"direction": list(rating_sync.DIRECTIONS)}
+    auto_fix = True
+    writes_library_files = True
+
+    def estimate_scope(self, context: JobContext) -> int:
+        try:
+            return len(rating_sync.library_tracks(context.db))
+        except Exception:
+            return 0
+
+    def scan(self, context: JobContext) -> JobResult:
+        settings = job_settings(self, context)
+        direction = str(settings.get("direction") or "").strip().lower()
+        if direction not in rating_sync.DIRECTIONS:
+            direction = rating_sync.NAVIDROME_TO_FILE
+        return rating_sync.sync(context, JobResult(), direction,
+                                clear_unrated=is_on(settings.get("clear_unrated", False)),
+                                dry_run=is_on(settings.get("dry_run", False)))
