@@ -542,6 +542,91 @@ def _album_tracks(album: Dict[str, Any], artist_name: str, source: Any) -> Dict[
                                    source_override=str(source or "").strip().lower() or None) or {}
 
 
+def _artist_dirs(artist_name: str) -> List[str]:
+    """The artist's folders at the top of each library root, under the name
+    the source uses or the one a tagging rule gives."""
+    names = {_fold(artist_name).strip()}
+    try:
+        rule = store.get_artist_name(artist_name)
+        if rule and rule.get("replacement"):
+            names.add(_fold(rule["replacement"]).strip())
+    except Exception as exc:
+        logger.debug("artist rule not read: %s", exc)
+    names.discard("")
+    out = []
+    for root in allowed_roots():
+        try:
+            out += [e.path for e in os.scandir(root)
+                    if e.is_dir(follow_symlinks=False) and _fold(e.name).strip() in names]
+        except OSError:
+            continue
+    return out
+
+
+def folder_by_name(album_name: str, artist_name: str) -> str:
+    """A folder under the artist's own folder that is named after the album
+    (in the source's spelling or a translation of it) and holds audio, or ""."""
+    wanted = name_keys(album_name)
+    plain = _fold(album_name).strip()
+    best, best_score = "", 0.0
+    for artist_dir in _artist_dirs(artist_name):
+        try:
+            entries = [e for e in os.scandir(artist_dir) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            continue
+        for entry in entries:
+            own = _fold(entry.name).strip()
+            value = 1.0 if own == plain else _keys_score(name_keys(entry.name), wanted)
+            if value >= 0.95 and value > best_score and count_audio_deep(entry.path):
+                best, best_score = entry.path, value
+    return best
+
+
+def suggest_folder(db: Any, album: Dict[str, Any], artist: Dict[str, Any], source: Any = "") -> Dict[str, Any]:
+    """Where an album's files are, for matching a whole discography at once:
+    ``{"folder", "by", "found", "total"}``. ``by`` says how the folder was
+    found: "saved" (picked before), "library" (the library's tracks of the
+    album sit there), "name" (a folder of the artist named after the album)
+    or "" (none). ``found``/``total`` are the album's tracks in the library or
+    that folder; both 0 when the track list cannot be had."""
+    artist_name = str((artist or {}).get("name") or "")
+    saved = saved_folder(source, album, artist)["folder"]
+    payload = {}
+    try:
+        payload = _album_tracks(album, artist_name, source)
+    except Exception as exc:
+        logger.debug("track list not fetched for %r: %s", album.get("name"), exc)
+    tracks = (payload.get("tracks") or []) if payload.get("success") else []
+    full = dict(payload.get("album") or {})
+    full.update({k: v for k, v in album.items() if k in ("id", "name") and v})
+    found = total = 0
+    folder, by = saved, "saved" if saved else ""
+    if tracks:
+        result = analyse_album(db, full, artist, tracks, _active_server(), source=source)
+        found, total = result["found"], result["total"]
+        if not folder and result["folder"]:
+            folder, by = result["folder"], "library"
+    if not folder:
+        folder = folder_by_name(str(album.get("name") or ""), artist_name)
+        if folder:
+            by = "name"
+            if tracks:
+                try:
+                    found = max(found, len(_folder_matches(folder, full, artist, tracks)))
+                except Exception as exc:
+                    logger.debug("folder %s not matched: %s", folder, exc)
+    return {"folder": folder, "by": by, "found": found, "total": total}
+
+
+def _active_server() -> Optional[str]:
+    try:
+        from core.settings import config_manager
+
+        return config_manager.get_active_media_server()
+    except Exception:
+        return None
+
+
 def _analysed_counts(db: Any, album: Dict[str, Any], artist_name: str, source: Any) -> Optional[Tuple[int, int]]:
     """``(found, total)`` from the last analysis if nothing it depends on has
     changed, else from a new one. None when the track list is not available."""
@@ -558,16 +643,10 @@ def _analysed_counts(db: Any, album: Dict[str, Any], artist_name: str, source: A
     tracks = payload.get("tracks") or []
     if not payload.get("success") or not tracks:
         return None
-    try:
-        from core.settings import config_manager
-
-        server = config_manager.get_active_media_server()
-    except Exception:
-        server = None
     # the card's own id and name stay: the saved folder is filed under them
     full = dict(payload.get("album") or {})
     full.update({k: v for k, v in album.items() if k in ("id", "name") and v})
-    result = analyse_album(db, full, artist, tracks, server, source=source)
+    result = analyse_album(db, full, artist, tracks, _active_server(), source=source)
     return result["found"], result["total"]
 
 

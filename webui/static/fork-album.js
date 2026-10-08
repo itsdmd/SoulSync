@@ -154,7 +154,7 @@
     // up to date now instead of on the next visit to the artist.
     function updateCard(album, data) {
         const albumId = album && album.id;
-        if (!albumId || !data.total || typeof window.updateAlbumCompletionOverlay !== 'function') return;
+        if (!albumId || !data.total) return;
         const completion = {
             id: albumId,
             name: album.name || '',
@@ -164,12 +164,15 @@
             completion_percentage: Math.round((data.found / data.total) * 1000) / 10,
             confidence: data.found ? 1 : 0,
         };
+        // the artist page (React) listens for this and repaints the card
+        try { window.dispatchEvent(new CustomEvent('fork:album-checked', { detail: completion })); } catch (_) { /* old browser */ }
         try {
             for (const [containerId, type] of [['album-cards-container', 'albums'], ['singles-cards-container', 'singles']]) {
                 const container = document.getElementById(containerId);
                 if (!container) continue;
                 const cards = container.querySelectorAll('[data-album-id]');
                 if (![...cards].some((card) => card.dataset.albumId === String(albumId))) continue;
+                if (typeof window.updateAlbumCompletionOverlay !== 'function') continue;
                 window.updateAlbumCompletionOverlay(completion, type);
                 // the page keeps what it was told per artist and paints from it again
                 // eslint-disable-next-line no-undef
@@ -867,6 +870,166 @@
         window.openDownloadMissingModalForArtistAlbum = wrapped;
         return true;
     }
+
+    // ── folders for a whole discography ──────────────────────────────────
+    // Opened from the artist page ("Match folders…"). Looks up where each
+    // release's files are, lets the user correct the list, then saves the
+    // ticked folders so every later check reads them straight from there.
+
+    const HOW = {
+        saved: 'Saved',
+        library: 'From your library',
+        name: 'Folder with the album\'s name',
+        picked: 'Picked by you',
+    };
+
+    function openFolderMatcher(options) {
+        const artist = (options && options.artist) || {};
+        const source = (options && options.source) || artist.source || '';
+        const rows = ((options && options.releases) || []).filter((r) => r && r.id != null).map((r) => ({
+            album: { id: String(r.id), name: r.name || '' }, type: r.type || '', state: 'waiting', folder: '', by: '',
+            found: 0, total: 0, ticked: false,
+        }));
+        const list = el('div', { class: 'fork-volume-list fork-match-list' });
+        const status = el('span', { class: 'fork-album-status' });
+        const saveBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Save', disabled: true });
+        let closed = false;
+        let saving = false;
+
+        const body = (row, extra) => Object.assign({ album: row.album, artist: { name: artist.name || '' }, source }, extra || {});
+        const worth = (row) => row.by === 'library' || row.by === 'picked'
+            || (row.by === 'name' && row.found >= Math.max(1, Math.ceil(row.total / 2)));
+
+        function describe(row) {
+            if (row.state === 'waiting') return 'Waiting…';
+            if (row.state === 'looking') return 'Looking…';
+            if (row.state === 'error') return `Could not check: ${row.error}`;
+            if (!row.folder) return 'No folder found';
+            const count = row.total ? `${row.found} of ${row.total} tracks there` : '';
+            return [HOW[row.by] || '', count].filter(Boolean).join('  ·  ');
+        }
+
+        function refresh() {
+            const done = rows.filter((r) => r.state === 'done' || r.state === 'error').length;
+            const ticked = rows.filter((r) => r.ticked && r.folder && r.by !== 'saved').length;
+            const saved = rows.filter((r) => r.by === 'saved').length;
+            status.textContent = done < rows.length
+                ? `Checking ${done} / ${rows.length}…`
+                : `${rows.filter((r) => r.folder).length} of ${rows.length} have a folder (${saved} saved)`;
+            saveBtn.textContent = ticked ? `Save ${ticked} folder${ticked === 1 ? '' : 's'}` : 'Save';
+            saveBtn.disabled = saving || !ticked;
+        }
+
+        function paint(row) {
+            const box = el('input', {
+                type: 'checkbox', 'aria-label': `Save the folder for ${row.album.name}`,
+                checked: row.ticked && !!row.folder && row.by !== 'saved',
+                disabled: !row.folder || row.by === 'saved' || saving,
+                onchange: (e) => { row.ticked = e.target.checked; refresh(); },
+            });
+            const node = el('div', { class: `fork-volume-row fork-match-row${row.by === 'saved' ? ' fork-match-saved' : ''}` }, [
+                box,
+                el('div', { class: 'fork-volume-name' }, [
+                    el('div', { text: row.album.name + (row.type ? `  ·  ${row.type}` : ''), title: row.album.name }),
+                    el('small', { text: row.folder || describe(row), title: row.folder }),
+                    row.folder ? el('small', { text: describe(row) }) : null,
+                ]),
+                el('button', {
+                    class: 'download-control-btn secondary', type: 'button', text: row.folder ? 'Change…' : 'Pick…',
+                    title: 'Pick the folder that holds this album', disabled: saving,
+                    onclick: () => openBrowser(row.folder, (picked) => {
+                        Object.assign(row, { folder: picked, by: 'picked', ticked: true, state: 'done' });
+                        paint(row);
+                        refresh();
+                    }),
+                }),
+            ]);
+            if (row.node) row.node.replaceWith(node); else list.append(node);
+            row.node = node;
+        }
+
+        async function look(row) {
+            row.state = 'looking';
+            paint(row);
+            try {
+                const data = await api('/suggest-folder', body(row));
+                if (row.by === 'picked') return;   // the user was quicker
+                Object.assign(row, { state: 'done', folder: data.folder || '', by: data.by || '', found: data.found || 0, total: data.total || 0 });
+                row.ticked = worth(row);
+            } catch (err) {
+                Object.assign(row, { state: 'error', error: (err && err.message) || 'unknown error' });
+            }
+            paint(row);
+            refresh();
+        }
+
+        async function lookAll() {
+            let next = 0;
+            const worker = async () => {
+                while (!closed && next < rows.length) await look(rows[next++]);
+            };
+            await Promise.all([worker(), worker()]);
+        }
+
+        async function save() {
+            saving = true;
+            let saved = 0;
+            const failed = [];
+            for (const row of rows.filter((r) => r.ticked && r.folder && r.by !== 'saved')) {
+                status.textContent = `Saving ${saved + 1}…`;
+                try {
+                    const data = await api('/folder', body(row, { folder: row.folder }));
+                    const after = await api('/suggest-folder', body(row));
+                    Object.assign(row, { folder: data.folder || row.folder, by: 'saved', ticked: false, found: after.found || 0, total: after.total || 0 });
+                    updateCard(row.album, after);
+                    saved++;
+                } catch (err) {
+                    failed.push(`${row.album.name}: ${(err && err.message) || 'unknown error'}`);
+                }
+                paint(row);
+            }
+            saving = false;
+            rows.forEach(paint);
+            refresh();
+            if (failed.length) toast(`${failed.length} not saved — ${failed[0]}`, 'error');
+            else toast(`Saved ${saved} folder${saved === 1 ? '' : 's'}`);
+        }
+
+        saveBtn.addEventListener('click', save);
+        const root = overlay('fork-volume-editor fork-match-dialog', [
+            el('h3', { text: `Match folders — ${artist.name || 'artist'}` }),
+            el('div', {
+                class: 'fork-album-note',
+                text: 'Each release is looked up in your library. Ticked folders are saved for their album, so opening the '
+                    + 'artist or the album later reads the files straight from there instead of searching for them again.',
+            }),
+            el('div', { class: 'fork-match-tools' }, [
+                el('button', {
+                    class: 'download-control-btn secondary', type: 'button', text: 'Tick all found',
+                    onclick: () => { rows.forEach((r) => { if (r.folder && r.by !== 'saved') r.ticked = true; paint(r); }); refresh(); },
+                }),
+                el('button', {
+                    class: 'download-control-btn secondary', type: 'button', text: 'Untick all',
+                    onclick: () => { rows.forEach((r) => { r.ticked = false; paint(r); }); refresh(); },
+                }),
+            ]),
+            list,
+            el('div', { class: 'fork-album-actions' }, [
+                status,
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Close', onclick: () => root.remove() }),
+                saveBtn,
+            ]),
+        ]);
+        new MutationObserver((_m, observer) => {
+            if (!document.body.contains(root)) { closed = true; observer.disconnect(); }
+        }).observe(document.body, { childList: true });
+        rows.forEach(paint);
+        refresh();
+        if (!rows.length) status.textContent = 'This artist has no releases to match';
+        lookAll();
+    }
+
+    window.forkMatchAlbumFolders = openFolderMatcher;
 
     // the folder picker is reused by the LLM & Tagging panel (fork-ui.js)
     window.forkOpenFolderBrowser = openBrowser;

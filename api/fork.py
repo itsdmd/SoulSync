@@ -334,6 +334,20 @@ def album_check():
         get_database(), album, artist, tracks, server, source=_body_.get("source")))
 
 
+@bp.route("/api/fork/album/suggest-folder", methods=["POST"])
+@admin_only
+def album_suggest_folder():
+    """Where an album's files are (saved, in the library, or by folder name),
+    with how many of its tracks are there. For matching a discography at once."""
+    from core.fork import album_tagging
+    from database.music_database import get_database
+
+    body, album, artist, _tracks = _album_payload()
+    if not album.get("id") and not album.get("name"):
+        return jsonify(success=False, error="No album given"), 400
+    return jsonify(success=True, **album_tagging.suggest_folder(get_database(), album, artist, body.get("source")))
+
+
 @bp.route("/api/fork/album/folder", methods=["POST"])
 @admin_only
 def album_save_folder():

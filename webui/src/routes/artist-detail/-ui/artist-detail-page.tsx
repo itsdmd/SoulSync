@@ -28,6 +28,7 @@ import {
   type DiscographyFilterState,
   isMusicBrainzDiscography,
 } from '../-artist-detail.filters';
+import { folderMatchRequest, forkFolderMatcher } from '../-artist-detail.fork';
 import { mergeGapReleases } from '../-artist-detail.gap-fill';
 import { heroImage } from '../-artist-detail.hero-stats';
 import {
@@ -499,6 +500,21 @@ export function ArtistDetailPage() {
             enhanced={showEnhanced}
             onToggleEnhanced={toggleEnhanced}
           />
+          {/* fork: save where each release's files are, for the whole discography */}
+          {!sourceOnly && !showEnhanced && profile?.isAdmin && forkFolderMatcher() ? (
+            <div className="discography-filters fork-discography-tools">
+              <button
+                type="button"
+                className="discography-filter-btn"
+                title="Find and save the folder of every release, so its files are not searched for again"
+                onClick={() =>
+                  forkFolderMatcher()?.(folderMatchRequest(payload.artist?.name, streamed))
+                }
+              >
+                Match folders…
+              </button>
+            </div>
+          ) : null}
           {showEnhanced ? (
             <div id="enhanced-view-container">
               <EnhancedView

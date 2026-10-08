@@ -524,3 +524,12 @@ select.fork-album-input option { background: #181818; }
     color: rgb(var(--accent-light-rgb, var(--accent-rgb)));
     min-height: 1.1em;
 }
+
+/* ── folders for a whole discography ─────────────────────────────────── */
+.fork-match-list { max-height: 54vh; }
+.fork-match-row input[type="checkbox"] { flex: none; width: 16px; height: 16px; }
+.fork-match-row small + small { color: rgba(255, 255, 255, 0.38); }
+.fork-match-saved .fork-volume-name div { color: #4ade80; }
+.fork-match-tools { display: flex; gap: 8px; margin-bottom: 8px; }
+.fork-match-tools .download-control-btn { padding: 5px 12px; font-size: 0.78rem; }
+.fork-discography-tools { justify-content: flex-end; margin-top: -6px; }

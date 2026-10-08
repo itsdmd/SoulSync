@@ -581,6 +581,43 @@ def test_without_a_track_list_the_album_level_answer_stands(analysis, library, m
     assert album_tagging.completion_from_analysis(_Library(), missing, CARD, "周杰倫", "spotify")["owned_tracks"] == 2
 
 
+def test_a_folder_is_suggested_from_the_library_then_by_name_then_not_at_all(analysis, library, monkeypatch):
+    # 1. the library's own tracks of the album sit in a folder
+    folder = _album_on_disk(library, "Somewhere")
+    owned = {"夜曲": os.path.join(folder, "01 - Nocturne (夜曲).flac")}
+
+    class Owning(_Library):
+        def check_track_exists(self, title, artist, **kwargs):
+            self.asked += 1
+            if title in owned:
+                return type("Row", (), {"title": title, "file_path": owned[title]})(), 1.0
+            return None, 0.0
+
+    monkeypatch.setattr(album_tagging, "_resolve", lambda p: p)
+    out = album_tagging.suggest_folder(Owning(), ALBUM, ARTIST, "spotify")
+    assert out == {"folder": os.path.realpath(folder), "by": "library", "found": 1, "total": 3}
+
+    # 2. nothing in the library: a folder of the artist named after the album (here its translation)
+    named = library / "Jay Chou" / "November's Chopin (十一月的蕭邦)"
+    _flac(str(named / "01 - Nocturne (夜曲).flac"), title="Nocturne (夜曲)", tracknumber=1)
+    _flac(str(named / "02 - x.flac"), title="Hair Like Snow (髮如雪)", tracknumber=2)
+    (library / "Jay Chou" / "十一月的蕭邦 empty").mkdir()
+    out = album_tagging.suggest_folder(_Library(), ALBUM, ARTIST, "spotify")
+    assert out == {"folder": str(named), "by": "name", "found": 2, "total": 3}
+
+    # 3. once saved it is simply the saved one
+    album_tagging.save_folder("spotify", ALBUM, ARTIST, str(named))
+    out = album_tagging.suggest_folder(_Library(), ALBUM, ARTIST, "spotify")
+    assert (out["by"], out["found"]) == ("saved", 2)
+
+    # 4. no folder anywhere; and no track list is not an error
+    other = dict(ALBUM, id="al9", name="Unheard Of")
+    assert album_tagging.suggest_folder(_Library(), other, ARTIST, "spotify")["folder"] == ""
+    monkeypatch.setattr(album_tagging, "_album_tracks", lambda *a: {"success": False})
+    assert album_tagging.suggest_folder(_Library(), other, ARTIST, "spotify") == {
+        "folder": "", "by": "", "found": 0, "total": 0}
+
+
 def test_completion_check_is_wrapped_and_shows_the_analysis(analysis, monkeypatch):
     from core.metadata import completion
 

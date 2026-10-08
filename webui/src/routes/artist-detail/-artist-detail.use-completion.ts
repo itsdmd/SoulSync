@@ -11,6 +11,7 @@ import {
   type StreamCounts,
   tallyEvent,
 } from './-artist-detail.completion';
+import { albumCheckedEvent, FORK_ALBUM_CHECKED } from './-artist-detail.fork';
 
 export interface CompletionState {
   /** The discography with every resolved ownership merged in. */
@@ -142,6 +143,20 @@ export function useCompletionStream(
       controller.abort();
     };
   }, [artistName, enabled, initial]);
+
+  // fork: an album checked elsewhere (its pop-up, the folder matcher) repaints its card
+  useEffect(() => {
+    const onChecked = (raw: Event) => {
+      const event = albumCheckedEvent(raw);
+      if (!event) return;
+      const next = applyCompletionEvent(discographyRef.current, event);
+      if (next === discographyRef.current) return;
+      discographyRef.current = next;
+      setState((s) => ({ ...s, discography: next }));
+    };
+    window.addEventListener(FORK_ALBUM_CHECKED, onChecked);
+    return () => window.removeEventListener(FORK_ALBUM_CHECKED, onChecked);
+  }, []);
 
   return state;
 }
