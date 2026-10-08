@@ -37,3 +37,49 @@ export const useRenameOnlyStore = create<{
 export function getRenameOnly(): boolean {
   return useRenameOnlyStore.getState().renameOnly;
 }
+
+/**
+ * fork: dismissing a selection. Upstream only dismisses entries the importer
+ * has a record for (needs review / needs identifying); a fresh drop that is
+ * still waiting, or a failed one, could not be cleared from a selection.
+ */
+interface DismissableItem {
+  key: string;
+  status: string;
+  in_staging: boolean;
+  history_id?: number | null;
+  folder_path: string;
+  folder_name: string;
+  file_count: number;
+}
+
+const DISMISSABLE = new Set(['waiting', 'needs_review', 'needs_identify', 'failed']);
+
+export function forkCanDismiss(item: DismissableItem): boolean {
+  return item.in_staging && DISMISSABLE.has(item.status);
+}
+
+export async function forkDismissItems(items: DismissableItem[]): Promise<number> {
+  const response = await fetch('/api/fork/import/dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      items: items.map((item) => ({
+        key: item.key,
+        history_id: item.history_id ?? null,
+        folder_path: item.folder_path,
+        folder_name: item.folder_name,
+        file_count: item.file_count,
+      })),
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    success?: boolean;
+    dismissed?: number;
+    errors?: string[];
+    error?: string;
+  };
+  if (!response.ok || !payload.success) throw new Error(payload.error || 'Failed to dismiss');
+  if (payload.errors?.length) throw new Error(`Some were not dismissed: ${payload.errors[0]}`);
+  return payload.dismissed ?? 0;
+}

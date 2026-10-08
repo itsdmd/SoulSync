@@ -6,7 +6,8 @@
 // (tag / original value / new value, as in MusicBrainz Picard).
 //
 // Files and folders are moved by dragging them onto a folder, in the list or
-// the tree; a box above the tree filters folders by name.
+// the tree; a box above the tree filters folders by name. Copy, cut, paste,
+// move to, delete and rename are buttons above the list and a right-click menu.
 //
 // The tree and the search read a cached index of the library kept by the
 // server (core/fork/library_index.py); only the folder that is open is read
@@ -86,11 +87,23 @@
         ];
         s.crumbEl = el('div', { class: 'fork-editor-crumb' });
         s.countEl = el('span', { class: 'fork-album-status' });
-        s.renameBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Rename…', disabled: true, title: 'Rename the selected file or folder (F2)', onclick: () => openRename() });
-        s.bulkBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Bulk rename…', disabled: true, title: 'Find and replace in the names of the selected items', onclick: () => openBulkRename() });
+        const act = (text, title, fn) => el('button', { class: 'download-control-btn secondary', type: 'button', text, title, disabled: true, onclick: fn });
+        s.btns = {
+            copy: act('Copy', 'Copy the selected items (Ctrl+C)', () => setClip('copy', picks())),
+            cut: act('Cut', 'Cut the selected items, to paste them elsewhere (Ctrl+X)', () => setClip('cut', picks())),
+            paste: act('Paste', 'Paste into the open folder (Ctrl+V)', () => paste(s.path)),
+            moveTo: act('Move to…', 'Pick a folder to move the selected items into', () => moveTo(picks())),
+            del: act('Delete', 'Delete the selected items for good (Delete)', () => confirmDelete(picks())),
+            rename: act('Rename…', 'Rename the selection: a new name, or find and replace (F2)', () => openRename()),
+        };
         s.listEl = el('div', { class: 'fork-editor-list', tabindex: '0', onkeydown: onListKey });
         // dropping on the empty part of the list moves into the open folder
         dropTarget(s.listEl, () => (s.searching ? '' : s.path));
+        s.listEl.addEventListener('contextmenu', (e) => {
+            if (e.target.closest('.fork-editor-row:not(.fork-editor-rowhead)')) return;   // rows have their own
+            e.preventDefault();
+            if (!s.searching) showMenu(e, [{ label: 'Paste', disabled: !s.clip, fn: () => paste(s.path) }]);
+        });
         s.coverEl = el('div', { class: 'fork-editor-cover' });
         s.tagsEl = el('div', { class: 'fork-editor-tags' });
         s.statusEl = el('span', { class: 'fork-album-status' });
@@ -111,7 +124,7 @@
                 ]),
                 el('div', { class: 'fork-editor-main' }, [
                     el('div', { class: 'fork-editor-search' }, [s.searchEl, ...s.modeBtns]),
-                    el('div', { class: 'fork-editor-bar' }, [s.crumbEl, s.countEl, s.renameBtn, s.bulkBtn]),
+                    el('div', { class: 'fork-editor-bar' }, [s.crumbEl, s.countEl, ...Object.values(s.btns)]),
                     s.listEl,
                     el('div', { class: 'fork-editor-panel' }, [
                         s.coverEl,
@@ -135,6 +148,7 @@
         clearTimeout(page.searchTimer);
         clearTimeout(page.pollTimer);
         clearTimeout(page.treeTimer);
+        closeMenu();
         document.removeEventListener('keydown', onKey, true);
         page.root.remove();
         page = null;
@@ -184,6 +198,20 @@
             onclick: () => navigate(node.path),
             ondblclick: () => toggle(node),
         }, [node.caret, el('span', { class: 'fork-editor-nodename', text: dir.name })]);
+        node.row.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const self = [{ path: node.path, name: node.name, kind: 'dir' }];
+            const fixed = depth === 0;                                 // a library folder itself stays put
+            showMenu(e, [
+                { label: 'Open', fn: () => navigate(node.path) },
+                { label: 'Rename…', disabled: fixed, fn: () => openRename(self) },
+                { label: 'Copy', disabled: fixed, fn: () => setClip('copy', self) },
+                { label: 'Cut', disabled: fixed, fn: () => setClip('cut', self) },
+                { label: 'Paste into this folder', disabled: !page.clip, fn: () => paste(node.path) },
+                { label: 'Move to…', disabled: fixed, fn: () => moveTo(self) },
+                { label: 'Delete', disabled: fixed, danger: true, fn: () => confirmDelete(self) },
+            ]);
+        });
         if (depth > 0) dragSource(node.row, () => [node.path]);       // a library folder itself stays put
         dropTarget(node.row, () => node.path);
         node.box = el('div', { class: 'fork-editor-kids', hidden: true });
@@ -340,10 +368,7 @@
                 if (data.errors.length) toast(`${data.moved.length} moved, ${data.errors.length} not — ${data.errors[0]}`, 'error');
                 else toast(`Moved ${data.moved.length} item${data.moved.length === 1 ? '' : 's'}`);
                 if (page !== s) return;
-                for (const folder of new Set(paths.map(parentOf).concat([dest]))) await refreshTree(folder);
-                if (s.treeFilterEl.value.trim()) filterTree();
-                // the open folder itself may have been moved away
-                if (paths.some((p) => inside(s.path, p))) navigate(dest); else reload();
+                await refreshAfter(paths.map(parentOf).concat([dest]), paths, dest);
             } catch (err) { status.textContent = err.message; status.classList.add('fork-volume-problem'); go.disabled = false; }
         });
         const root = dialog('fork-editor-rename', [
@@ -473,22 +498,40 @@
 
     function paintList() {
         const s = page;
-        const head = el('div', { class: 'fork-editor-row fork-editor-rowhead' }, ['Name', 'Title', 'Artist', 'Album', '#', 'Size', 'Modified'].map((t) => el('span', { text: t })));
+        s.allBox = el('input', {
+            type: 'checkbox', 'aria-label': 'Select everything', title: 'Select all / none',
+            onchange: () => { if (blocked()) { paintChecks(); return; } s.selected = new Set(s.allBox.checked ? s.items.map((i) => i.path) : []); paintChecks(); selectionChanged(); },
+        });
+        const head = el('div', { class: 'fork-editor-row fork-editor-rowhead' }, [el('span', {}, s.allBox), ...['Name', 'Title', 'Artist', 'Album', '#', 'Size', 'Modified'].map((t) => el('span', { text: t }))]);
         const rows = [];
         if (!s.searching && s.parent) {
             const up = el('div', { class: 'fork-editor-row', ondblclick: () => navigate(s.parent), title: 'Up one folder' },
-                [el('span', { text: '📁 ..' }), ...Array.from({ length: 6 }, () => el('span'))]);
+                [el('span'), el('span', { text: '📁 ..' }), ...Array.from({ length: 6 }, () => el('span'))]);
             dropTarget(up, () => s.parent);
             rows.push(up);
         }
         for (const item of s.items) {
             const where = s.searching ? item.path.slice(0, item.path.length - item.name.length - 1) : '';
+            item.box = el('input', {
+                type: 'checkbox', 'aria-label': `Select ${item.name}`,
+                onclick: (e) => e.stopPropagation(),            // ticking never replaces the selection
+                ondblclick: (e) => e.stopPropagation(),
+                onchange: () => {
+                    if (blocked()) { paintChecks(); return; }
+                    if (item.box.checked) s.selected.add(item.path); else s.selected.delete(item.path);
+                    s.anchor = item.path;
+                    paintChecks();
+                    selectionChanged();
+                },
+            });
             const row = el('div', {
-                class: `fork-editor-row${s.selected.has(item.path) ? ' selected' : ''}`, title: item.path,
+                class: 'fork-editor-row', title: item.path,
                 onmousedown: (e) => { if (e.shiftKey) e.preventDefault(); },   // no text selection on shift+click
                 onclick: (e) => clickRow(item, e),
                 ondblclick: () => (item.kind === 'dir' ? navigate(item.path) : s.searching ? navigate(where, item.path) : null),
+                oncontextmenu: (e) => rowMenu(item, where, e),
             }, [
+                el('span', { class: 'fork-editor-tick' }, item.box),
                 el('span', { class: 'fork-editor-name' }, [`${ICONS[item.kind] || ICONS.other} ${item.name}`, where ? el('small', { text: where }) : null]),
                 el('span', { text: item.title || '' }), el('span', { text: item.artist || '' }), el('span', { text: item.album || '' }),
                 el('span', { text: item.track || '' }),
@@ -502,6 +545,47 @@
         }
         if (!s.items.length) rows.push(el('div', { class: 'fork-album-note', text: s.searching ? 'Nothing found.' : 'This folder is empty.' }));
         s.listEl.replaceChildren(head, ...rows);
+        paintChecks();
+    }
+
+    // Rows, their tick boxes and the header box follow the selection (and
+    // cut items are dimmed until they are pasted).
+    function paintChecks() {
+        const s = page;
+        const cut = s.clip && s.clip.mode === 'cut' ? new Set(s.clip.items.map((i) => i.path)) : null;
+        for (const i of s.items) {
+            const on = s.selected.has(i.path);
+            if (i.row) { i.row.classList.toggle('selected', on); i.row.classList.toggle('cut', !!cut && cut.has(i.path)); }
+            if (i.box) i.box.checked = on;
+        }
+        if (s.allBox) {
+            s.allBox.checked = s.items.length > 0 && s.selected.size >= s.items.length;
+            s.allBox.indeterminate = s.selected.size > 0 && s.selected.size < s.items.length;
+        }
+    }
+
+    function rowMenu(item, where, e) {
+        const s = page;
+        e.preventDefault();
+        if (!s.selected.has(item.path)) {
+            if (blocked()) return;
+            s.selected = new Set([item.path]);
+            s.anchor = item.path;
+            paintChecks();
+            selectionChanged();
+        }
+        const many = s.selected.size > 1;
+        showMenu(e, [
+            item.kind === 'dir' ? { label: 'Open', disabled: many, fn: () => navigate(item.path) }
+                : s.searching ? { label: 'Show in its folder', disabled: many, fn: () => navigate(where, item.path) } : null,
+            { label: many ? `Rename ${s.selected.size} items…` : 'Rename…', fn: () => openRename() },
+            { label: 'Copy', fn: () => setClip('copy', picks()) },
+            { label: 'Cut', fn: () => setClip('cut', picks()) },
+            item.kind === 'dir' && !many ? { label: 'Paste into this folder', disabled: !s.clip, fn: () => paste(item.path) }
+                : { label: 'Paste', disabled: !s.clip || s.searching, fn: () => paste(s.path) },
+            { label: 'Move to…', fn: () => moveTo(picks()) },
+            { label: many ? `Delete ${s.selected.size} items` : 'Delete', danger: true, fn: () => confirmDelete(picks()) },
+        ]);
     }
 
     // Click selects one; Ctrl/⌘+click adds or removes one; Shift+click selects
@@ -522,19 +606,25 @@
             s.selected = new Set([item.path]);
             s.anchor = item.path;
         }
-        for (const i of s.items) if (i.row) i.row.classList.toggle('selected', s.selected.has(i.path));
+        paintChecks();
         selectionChanged();
     }
 
     function onListKey(e) {
         const s = page;
-        if (!s) return;
+        if (!s || e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') return;
+        const mod = e.ctrlKey || e.metaKey;
+        const key = e.key.toLowerCase();
         if (e.key === 'F2') { e.preventDefault(); openRename(); }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        if (e.key === 'Delete' && s.selected.size) { e.preventDefault(); confirmDelete(picks()); }
+        if (mod && key === 'c' && s.selected.size) { e.preventDefault(); setClip('copy', picks()); }
+        if (mod && key === 'x' && s.selected.size) { e.preventDefault(); setClip('cut', picks()); }
+        if (mod && key === 'v' && s.clip && !s.searching) { e.preventDefault(); paste(s.path); }
+        if (mod && key === 'a') {
             e.preventDefault();
             if (blocked()) return;
             s.selected = new Set(s.items.map((i) => i.path));
-            for (const i of s.items) if (i.row) i.row.classList.add('selected');
+            paintChecks();
             selectionChanged();
         }
         if (e.key === 'Enter' && s.selected.size === 1) {
@@ -544,6 +634,8 @@
     }
 
     const chosen = () => page.items.filter((i) => page.selected.has(i.path));
+    // the selection as plain {path, name, kind}, safe to keep after the list changes
+    const picks = () => chosen().map((i) => ({ path: i.path, name: i.name, kind: i.kind }));
 
     // ── tag editor ───────────────────────────────────────────────────────
 
@@ -557,8 +649,7 @@
         const picked = chosen();
         const audio = picked.filter((i) => i.kind === 'audio');
         s.countEl.textContent = picked.length ? `${picked.length} selected` : `${s.items.length} item${s.items.length === 1 ? '' : 's'}`;
-        s.renameBtn.disabled = picked.length !== 1;
-        s.bulkBtn.disabled = !picked.length;
+        paintButtons();
         if (!keepEdits) resetEdits();
         const seq = ++s.tagSeq;
         if (!audio.length || audio.length > MAX_EDIT) {
@@ -723,50 +814,174 @@
         return node;
     }
 
-    async function afterRename(folders) {
-        if (!page) return;
-        await reload();
-        for (const folder of folders) await refreshTree(folder);
+    function paintButtons() {
+        const s = page;
+        const any = s.selected.size > 0;
+        for (const name of ['copy', 'cut', 'moveTo', 'del', 'rename']) s.btns[name].disabled = !any;
+        s.btns.paste.disabled = !s.clip || s.searching;
+        s.btns.paste.textContent = s.clip ? `Paste ${s.clip.items.length}` : 'Paste';
     }
 
-    function openRename() {
+    // The list, the tree and the tree filter after files or folders changed.
+    // `gone` are paths that no longer exist where they were.
+    async function refreshAfter(folders, gone, fallback) {
         const s = page;
-        const picked = chosen();
-        if (!s || picked.length !== 1 || blocked()) return;
-        const item = picked[0];
-        const input = el('input', { class: 'fork-album-input', type: 'text', value: item.name, 'aria-label': 'New name' });
+        if (!s) return;
+        for (const folder of new Set(folders)) await refreshTree(folder);
+        if (page !== s) return;
+        if (s.treeFilterEl.value.trim()) filterTree();
+        if ((gone || []).some((p) => inside(s.path, p))) navigate(fallback || parentOf(gone[0]));
+        else await reload();
+    }
+
+    // ── right-click menu ─────────────────────────────────────────────────
+
+    function closeMenu() {
+        if (page && page.menu) { page.menu.remove(); page.menu = null; }
+    }
+
+    function showMenu(e, entries) {
+        const s = page;
+        closeMenu();
+        const menu = s.menu = el('div', { class: 'fork-editor-menu', role: 'menu' }, entries.filter(Boolean).map((entry) => el('button', {
+            type: 'button', role: 'menuitem', class: entry.danger ? 'danger' : '', text: entry.label, disabled: !!entry.disabled,
+            onclick: () => { closeMenu(); entry.fn(); },
+        })));
+        s.root.append(menu);
+        const box = menu.getBoundingClientRect();
+        menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - box.width - 4))}px`;
+        menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - box.height - 4))}px`;
+        setTimeout(() => {
+            const away = (ev) => {
+                if (ev.type === 'keydown' && ev.key !== 'Escape') return;
+                if (ev.type === 'mousedown' && menu.contains(ev.target)) return;
+                closeMenu();
+                for (const type of ['mousedown', 'keydown', 'wheel']) document.removeEventListener(type, away, true);
+            };
+            for (const type of ['mousedown', 'keydown', 'wheel']) document.addEventListener(type, away, true);
+        }, 0);
+    }
+
+    // ── copy, cut, paste, move to, delete ────────────────────────────────
+
+    function setClip(mode, items) {
+        const s = page;
+        if (!s || !items.length) return;
+        s.clip = { mode, items };
+        paintChecks();
+        paintButtons();
+        toast(`${items.length} item${items.length === 1 ? '' : 's'} ${mode === 'cut' ? 'cut' : 'copied'} — paste into a folder`);
+    }
+
+    async function paste(dest) {
+        const s = page;
+        if (!s || !s.clip || !dest || blocked()) return;
+        const clip = s.clip;
+        const paths = clip.items.map((i) => i.path);
+        try {
+            if (clip.mode === 'cut') {
+                if (paths.some((p) => inside(dest, p))) { toast('A folder cannot be moved into itself', 'error'); return; }
+                const data = await api('/move', { paths, destination: dest });
+                s.clip = null;
+                if (data.errors.length) toast(`${data.moved.length} moved, ${data.errors.length} not — ${data.errors[0]}`, 'error');
+                else toast(`Moved ${data.moved.length} item${data.moved.length === 1 ? '' : 's'}`);
+                await refreshAfter(paths.map(parentOf).concat([dest]), paths, dest);
+            } else {
+                const data = await api('/copy', { paths, destination: dest });
+                if (data.errors.length) toast(`${data.copied.length} copied, ${data.errors.length} not — ${data.errors[0]}`, 'error');
+                else toast(`Copied ${data.copied.length} item${data.copied.length === 1 ? '' : 's'}`);
+                await refreshAfter([dest], [], dest);
+            }
+        } catch (err) { toast(err.message, 'error'); }
+        if (page === s) { paintChecks(); paintButtons(); }
+    }
+
+    function moveTo(items) {
+        const s = page;
+        if (!s || !items.length || blocked()) return;
+        if (typeof window.forkOpenFolderBrowser !== 'function') { toast('The folder picker is not available', 'error'); return; }
+        const paths = items.map((i) => i.path);
+        window.forkOpenFolderBrowser(s.path, (picked) => {
+            if (!picked) return;
+            if (paths.some((p) => inside(picked, p))) { toast('A folder cannot be moved into itself', 'error'); return; }
+            if (!paths.some((p) => parentOf(p) !== picked)) { toast('They are already in that folder'); return; }
+            confirmMove(paths, picked);
+        });
+    }
+
+    async function confirmDelete(items) {
+        const s = page;
+        if (!s || !items.length || blocked()) return;
+        const paths = items.map((i) => i.path);
+        let what = '';
+        try {
+            const d = await api('/delete', { paths, preview: true });
+            what = `${d.files.toLocaleString()} file${d.files === 1 ? '' : 's'}${d.folders ? ` in ${d.folders.toLocaleString()} folder${d.folders === 1 ? '' : 's'}` : ''}, ${sizeText(d.bytes)}`;
+        } catch (err) { toast(err.message, 'error'); return; }
+        if (page !== s) return;
         const status = el('span', { class: 'fork-album-status' });
-        const go = async () => {
-            if (!input.value.trim() || input.value === item.name) { root.remove(); return; }
+        const go = el('button', { class: 'download-control-btn primary fork-editor-danger', type: 'button', text: 'Delete' });
+        go.addEventListener('click', async () => {
+            go.disabled = true;
             try {
-                const done = await api('/rename', { path: item.path, name: input.value });
+                const data = await api('/delete', { paths });
                 root.remove();
-                toast(done.sidecars.length ? `Renamed, with ${done.sidecars.length} lyrics file${done.sidecars.length === 1 ? '' : 's'}` : 'Renamed');
-                s.selected = new Set([done.path]);
-                await afterRename(item.kind === 'dir' ? [item.path.slice(0, item.path.length - item.name.length - 1)] : []);
-            } catch (err) { status.textContent = err.message; status.classList.add('fork-volume-problem'); }
-        };
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+                if (data.errors.length) toast(`${data.deleted.length} deleted, ${data.errors.length} not — ${data.errors[0]}`, 'error');
+                else toast(`Deleted ${data.deleted.length} item${data.deleted.length === 1 ? '' : 's'}`);
+                if (page !== s) return;
+                if (s.clip) { s.clip.items = s.clip.items.filter((i) => !paths.some((p) => inside(i.path, p))); if (!s.clip.items.length) s.clip = null; }
+                await refreshAfter(paths.map(parentOf), paths);
+            } catch (err) { status.textContent = err.message; status.classList.add('fork-volume-problem'); go.disabled = false; }
+        });
         const root = dialog('fork-editor-rename', [
-            el('h3', { text: `Rename ${item.kind === 'dir' ? 'folder' : 'file'}` }),
-            item.kind === 'audio' ? el('div', { class: 'fork-album-note', text: 'Lyrics files with the same name (.lrc, .txt) are renamed with it.' }) : null,
-            input,
+            el('h3', { text: `Delete ${items.length} item${items.length === 1 ? '' : 's'}?` }),
+            el('div', { class: 'fork-album-note', text: `${items.slice(0, 4).map((i) => i.name).join(', ')}${items.length > 4 ? ` and ${items.length - 4} more` : ''}` }),
+            el('div', { class: 'fork-editor-moveto' }, [el('strong', { text: what }), ' will be deleted for good. This cannot be undone.']),
+            el('div', { class: 'fork-album-note', text: 'A track\'s lyrics files are deleted with it, and the library forgets the deleted tracks.' }),
             el('div', { class: 'fork-album-actions' }, [
                 status,
                 el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
-                el('button', { class: 'download-control-btn primary', type: 'button', text: 'Rename', onclick: go }),
+                go,
             ]),
         ]);
-        input.focus();
-        const dot = item.kind === 'dir' ? -1 : item.name.lastIndexOf('.');
-        input.setSelectionRange(0, dot > 0 ? dot : item.name.length);
     }
 
-    function openBulkRename() {
+    // ── renaming: one name, or find and replace ──────────────────────────
+
+    function openRename(given) {
         const s = page;
-        const picked = chosen();
-        if (!s || !picked.length || blocked()) return;
-        const paths = picked.map((i) => i.path);
+        const items = given || picks();
+        if (!s || !items.length || blocked()) return;
+        const paths = items.map((i) => i.path);
+        const dirParents = [...new Set(items.filter((i) => i.kind === 'dir').map((i) => parentOf(i.path)))];
+        const one = items.length === 1 ? items[0] : null;
+        let root = null;
+
+        // tab 1: a new name for one item
+        const nameInput = el('input', { class: 'fork-album-input', type: 'text', value: one ? one.name : '', 'aria-label': 'New name' });
+        const nameStatus = el('span', { class: 'fork-album-status' });
+        const renameOne = async () => {
+            if (!nameInput.value.trim() || nameInput.value === one.name) { root.remove(); return; }
+            try {
+                const done = await api('/rename', { path: one.path, name: nameInput.value });
+                root.remove();
+                toast(done.sidecars.length ? `Renamed, with ${done.sidecars.length} lyrics file${done.sidecars.length === 1 ? '' : 's'}` : 'Renamed');
+                if (s.selected.has(one.path)) s.selected = new Set([done.path]);
+                await refreshAfter(dirParents, one.kind === 'dir' ? [one.path] : [], done.path);
+            } catch (err) { nameStatus.textContent = err.message; nameStatus.classList.add('fork-volume-problem'); }
+        };
+        nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') renameOne(); });
+        const single = el('div', { class: 'fork-editor-tabpane' }, one ? [
+            one.kind === 'audio' ? el('div', { class: 'fork-album-note', text: 'Lyrics files with the same name (.lrc, .txt) are renamed with it.' }) : null,
+            nameInput,
+            el('div', { class: 'fork-album-actions' }, [
+                nameStatus,
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                el('button', { class: 'download-control-btn primary', type: 'button', text: 'Rename', onclick: renameOne }),
+            ]),
+        ] : [el('div', { class: 'fork-album-note', text: 'Select a single item to give it a new name.' })]);
+
+        // tab 2: find and replace over every selected name
         const find = el('input', { class: 'fork-album-input', type: 'text', placeholder: 'Find', 'aria-label': 'Find' });
         const replace = el('input', { class: 'fork-album-input', type: 'text', placeholder: 'Replace with', 'aria-label': 'Replace with' });
         const regex = el('input', { type: 'checkbox' });
@@ -809,13 +1024,11 @@
                 const data = await api('/bulk-rename', body(true));
                 root.remove();
                 toast(data.problems ? `Renamed ${data.renamed}, ${data.problems} skipped` : `Renamed ${data.renamed}`, data.problems ? 'error' : 'success');
-                s.selected = new Set(data.items.map((i) => i.path));
-                const folders = new Set(picked.filter((i) => i.kind === 'dir').map((i) => i.path.slice(0, i.path.length - i.name.length - 1)));
-                await afterRename([...folders]);
+                if (!given) s.selected = new Set(data.items.map((i) => i.path));
+                await refreshAfter(dirParents, items.filter((i) => i.kind === 'dir').map((i) => i.path), data.items[0] && data.items[0].path);
             } catch (err) { status.textContent = err.message; status.classList.add('fork-volume-problem'); applyBtn.disabled = false; }
         });
-        const root = dialog('fork-volume-editor', [
-            el('h3', { text: `Bulk rename — ${paths.length} item${paths.length === 1 ? '' : 's'}` }),
+        const bulk = el('div', { class: 'fork-editor-tabpane' }, [
             el('div', { class: 'fork-album-note', text: 'Replaces text in the names of the selected files and folders. A file\'s extension is never changed, and lyrics files follow their track. With "Regular expression", groups are written $1, $2.' }),
             el('div', { class: 'fork-editor-find' }, [find, replace]),
             el('div', { class: 'fork-editor-find' }, [
@@ -829,8 +1042,27 @@
                 applyBtn,
             ]),
         ]);
+
+        const tabs = [
+            { button: el('button', { type: 'button', class: 'fork-editor-tab', role: 'tab', text: 'New name', disabled: !one, title: one ? '' : 'For a single item' }), pane: single, focus: nameInput },
+            { button: el('button', { type: 'button', class: 'fork-editor-tab', role: 'tab', text: 'Find and replace' }), pane: bulk, focus: find },
+        ];
+        const show = (tab) => {
+            for (const t of tabs) { t.button.classList.toggle('active', t === tab); t.pane.hidden = t !== tab; }
+            tab.focus.focus();
+        };
+        for (const t of tabs) t.button.addEventListener('click', () => show(t));
+        root = dialog('fork-volume-editor fork-editor-renamer', [
+            el('h3', { text: one ? `Rename ${one.kind === 'dir' ? 'folder' : 'file'}` : `Rename ${items.length} items` }),
+            el('div', { class: 'fork-editor-tabs', role: 'tablist' }, tabs.map((t) => t.button)),
+            single, bulk,
+        ]);
         preview();
-        find.focus();
+        show(one ? tabs[0] : tabs[1]);
+        if (one) {
+            const dot = one.kind === 'dir' ? -1 : one.name.lastIndexOf('.');
+            nameInput.setSelectionRange(0, dot > 0 ? dot : one.name.length);
+        }
     }
 
     // ── sidebar entry ────────────────────────────────────────────────────

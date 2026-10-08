@@ -483,6 +483,145 @@ def move(paths: List[Any], destination: Any, db: Any = None) -> Dict[str, Any]:
     return {"moved": moved, "errors": errors, "destination": target_dir}
 
 
+def _free_name(folder: str, name: str, is_dir: bool) -> str:
+    """``name``, or "name (copy)", "name (copy 2)"… when it is taken in ``folder``."""
+    if not os.path.exists(os.path.join(folder, name)):
+        return name
+    stem, ext = (name, "") if is_dir else (_stem(name), name[len(_stem(name)):])
+    for n in range(1, 1000):
+        candidate = f"{stem} (copy{'' if n == 1 else f' {n}'}){ext}"
+        if not os.path.exists(os.path.join(folder, candidate)):
+            return candidate
+    raise FileExistsError("too many copies with that name")
+
+
+def copy(paths: List[Any], destination: Any) -> Dict[str, Any]:
+    """Copy files and folders into the folder ``destination``. A name that is
+    taken there gets "(copy)" added, so pasting next to the original works. A
+    track's lyrics files are copied with it. The copies are plain files: the
+    library learns about them on its next scan."""
+    import shutil
+
+    from core.fork import library_index
+
+    target_dir = safe_path(destination)
+    if not os.path.isdir(target_dir):
+        raise ValueError("The destination is not a folder")
+    copied: List[str] = []
+    errors: List[str] = []
+    for raw in paths:
+        name = os.path.basename(str(raw).rstrip(os.sep))
+        try:
+            old = safe_path(raw)
+            is_dir = os.path.isdir(old)
+            if is_dir and (target_dir + os.sep).startswith(old.rstrip(os.sep) + os.sep):
+                raise ValueError("a folder cannot be copied into itself")
+            new = os.path.join(target_dir, _free_name(target_dir, os.path.basename(old), is_dir))
+            if is_dir:
+                shutil.copytree(old, new)
+            else:
+                shutil.copy2(old, new)
+                if library_index.kind_of(os.path.splitext(old)[1]) == "audio":
+                    old_stem, new_stem = os.path.splitext(old)[0], os.path.splitext(new)[0]
+                    for suffix in SIDECARS:
+                        if os.path.isfile(old_stem + suffix) and not os.path.exists(new_stem + suffix):
+                            shutil.copy2(old_stem + suffix, new_stem + suffix)
+            copied.append(new)
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    return {"copied": copied, "errors": errors, "destination": target_dir}
+
+
+def describe(paths: List[Any]) -> Dict[str, Any]:
+    """What deleting ``paths`` would remove: ``{"files", "folders", "bytes"}``."""
+    files = folders = size = 0
+    for raw in paths:
+        try:
+            path = safe_path(raw)
+        except (ValueError, PermissionError, FileNotFoundError):
+            continue
+        if os.path.isdir(path):
+            folders += 1
+            for current, dirs, names in os.walk(path):
+                folders += len(dirs)
+                for name in names:
+                    files += 1
+                    try:
+                        size += os.path.getsize(os.path.join(current, name))
+                    except OSError:
+                        pass
+        else:
+            files += 1
+            try:
+                size += os.path.getsize(path)
+            except OSError:
+                pass
+    return {"files": files, "folders": folders, "bytes": size}
+
+
+def _forget_library(db: Any, path: str, is_dir: bool) -> None:
+    if db is None:
+        return
+    try:
+        conn = db._get_connection()
+        try:
+            if is_dir:
+                prefix = path.rstrip(os.sep) + os.sep
+                like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                conn.execute("DELETE FROM tracks WHERE file_path LIKE ? ESCAPE '\\'", (like,))
+            else:
+                conn.execute("DELETE FROM tracks WHERE file_path = ?", (path,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("library rows not removed for %s: %s", path, exc)
+
+
+def delete(paths: List[Any], db: Any = None) -> Dict[str, Any]:
+    """Delete files and folders for good. A track's lyrics files go with it,
+    and the library forgets the tracks. A library folder itself is refused."""
+    import shutil
+
+    from core.fork import library_index
+
+    deleted: List[str] = []
+    errors: List[str] = []
+    # a folder first: its contents need no deleting of their own afterwards
+    for raw in sorted({str(p) for p in paths}, key=len):
+        name = os.path.basename(raw.rstrip(os.sep))
+        try:
+            if not os.path.lexists(raw) and any(raw.startswith(d.rstrip(os.sep) + os.sep) for d in deleted):
+                continue
+            path = safe_path(raw)
+            if _is_root(path):
+                raise PermissionError("a library folder itself cannot be deleted")
+            is_dir = os.path.isdir(path)
+            if is_dir:
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+                if library_index.kind_of(os.path.splitext(path)[1]) == "audio":
+                    stem = os.path.splitext(path)[0]
+                    for suffix in SIDECARS:
+                        if os.path.isfile(stem + suffix):
+                            os.remove(stem + suffix)
+                            library_index.moved(stem + suffix, "", False)
+            _forget_library(db, path, is_dir)
+            if is_dir:
+                library_index.forget(path)
+                try:
+                    library_index.scan_dir(os.path.dirname(path))
+                except FileNotFoundError:
+                    pass
+            else:
+                library_index.moved(path, "", False)
+            deleted.append(path)
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    return {"deleted": deleted, "errors": errors}
+
+
 def _replacer(find: str, replace: str, regex: bool, case_sensitive: bool):
     if not find:
         raise ValueError("Nothing to look for")
@@ -562,5 +701,5 @@ def field_list() -> List[Dict[str, str]]:
     return [{"name": name, "label": label} for name, label, *_rest in FIELDS]
 
 
-__all__ = ["FIELDS", "bulk_rename", "cover_of", "field_list", "move", "read_basic", "read_tags", "rename",
+__all__ = ["FIELDS", "bulk_rename", "copy", "cover_of", "delete", "describe", "field_list", "move", "read_basic", "read_tags", "rename",
            "roots", "safe_path", "save_tags"]

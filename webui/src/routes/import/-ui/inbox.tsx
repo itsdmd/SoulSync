@@ -26,6 +26,7 @@ import {
   toggleAutoImport,
   triggerAutoImportScan,
 } from '../-import.api';
+import { forkCanDismiss, forkDismissItems } from '../-import.fork';
 import { formatImportBytes } from '../-import.helpers';
 import {
   confidencePercent,
@@ -120,6 +121,16 @@ export function Inbox({
       for (const id of ids) await rejectAutoImportResult(id);
       return ids.length;
     },
+    onSuccess: (n) => {
+      window.showToast?.(n === 1 ? 'Dismissed' : `Dismissed ${n}`, 'success');
+      setSelected(new Set());
+      refreshAll();
+    },
+    onError,
+  });
+  // fork: the selection's Dismiss (waiting and failed entries included)
+  const dismissSelection = useMutation({
+    mutationFn: forkDismissItems,
     onSuccess: (n) => {
       window.showToast?.(n === 1 ? 'Dismissed' : `Dismissed ${n}`, 'success');
       setSelected(new Set());
@@ -262,9 +273,8 @@ export function Inbox({
   const selectedApprovable = selectedItems.filter(
     (item) => item.status === 'needs_review' && item.history_id != null,
   );
-  const selectedDismissable = selectedItems.filter(
-    (item) => inboxActions(item).includes('dismiss') && item.history_id != null,
-  );
+  // fork: any selected entry can be dismissed, not only the identified ones
+  const selectedDismissable = selectedItems.filter(forkCanDismiss);
   const selectable = visible.filter((item) => inboxActions(item).length > 0);
 
   return (
@@ -363,14 +373,14 @@ export function Inbox({
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={dismiss.isPending}
+                disabled={dismiss.isPending || dismissSelection.isPending}
                 onClick={async () => {
                   const ok = await confirmAction({
                     title: 'Dismiss',
                     message: `Dismiss ${selectedDismissable.length} items? Their files stay in the import folder.`,
                     confirmText: 'Dismiss',
                   });
-                  if (ok) dismiss.mutate(selectedDismissable.map((item) => item.history_id!));
+                  if (ok) dismissSelection.mutate(selectedDismissable);
                 }}
               >
                 Dismiss {selectedDismissable.length}

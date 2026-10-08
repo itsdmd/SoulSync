@@ -323,3 +323,62 @@ def test_moving_takes_lyrics_along_updates_paths_and_overwrites_nothing(lib, tmp
         editor.move([os.path.join(other, "01 - One.flac")], str(tmp_path))
     inside = editor.move([os.path.join(lib, "Artist")], os.path.join(lib, "Artist", "Empty"))
     assert inside["moved"] == [] and "into itself" in inside["errors"][0]
+
+
+def test_copy_keeps_both_and_delete_takes_lyrics_and_library_rows(lib, tmp_path):
+    album = os.path.join(lib, "Artist", "Album")
+    one = os.path.join(album, "01 - One.flac")
+    out = editor.copy([one], album)                               # pasted next to the original
+    assert out["errors"] == [] and [os.path.basename(p) for p in out["copied"]] == ["01 - One (copy).flac"]
+    assert os.path.exists(os.path.join(album, "01 - One (copy).lrc")) and os.path.exists(one)
+    assert os.path.basename(editor.copy([one], album)["copied"][0]) == "01 - One (copy 2).flac"
+    empty = os.path.join(lib, "Artist", "Empty")
+    out = editor.copy([album], empty)
+    assert out["copied"] == [os.path.join(empty, "Album")] and len(os.listdir(os.path.join(empty, "Album"))) >= 6
+    assert "into itself" in editor.copy([os.path.join(lib, "Artist")], empty)["errors"][0]
+
+    db = _Db(str(tmp_path / "lib.db"), [("One", one), ("Two", os.path.join(album, "02 - Two.flac")),
+                                        ("Far", os.path.join(lib, "Other", "x.flac"))])
+    assert editor.describe([one, empty]) == {"files": 1 + len(os.listdir(os.path.join(empty, "Album"))),
+                                             "folders": 2, "bytes": editor.describe([one, empty])["bytes"]}
+    library_index.listing(album)
+    out = editor.delete([one], db=db)
+    assert out["errors"] == [] and not os.path.exists(one)
+    assert not os.path.exists(os.path.join(album, "01 - One.lrc")) and not os.path.exists(
+        os.path.join(album, "01 - One.original.lrc"))
+    assert os.path.exists(os.path.join(album, "01 - One (copy).lrc"))      # another track's lyrics stay
+    assert len(db.paths()) == 2
+    out = editor.delete([album, os.path.join(album, "02 - Two.flac"), lib], db=db)
+    assert out["deleted"] == [album] and len(out["errors"]) == 1 and os.path.isdir(lib)
+    assert db.paths() == [os.path.join(lib, "Other", "x.flac")]
+    assert [d["name"] for d in library_index.children(os.path.join(lib, "Artist"))] == ["Empty"]
+
+
+def test_any_import_entry_can_be_dismissed(tmp_path, monkeypatch):
+    from core.fork import import_inbox
+
+    root = tmp_path / "import"
+    (root / "Drop").mkdir(parents=True)
+    monkeypatch.setattr(import_move, "staging_root", lambda: os.path.realpath(str(root)))
+
+    class Db:
+        def _get_connection(self):
+            return sqlite3.connect(str(tmp_path / "h.db"))
+
+    conn = Db()._get_connection()
+    conn.execute("CREATE TABLE auto_import_history (id INTEGER PRIMARY KEY AUTOINCREMENT, folder_name TEXT NOT NULL,"
+                 " folder_path TEXT NOT NULL, folder_hash TEXT, status TEXT NOT NULL DEFAULT 'scanning',"
+                 " total_files INTEGER DEFAULT 0, updated_at TIMESTAMP, processed_at TIMESTAMP)")
+    conn.execute("INSERT INTO auto_import_history (folder_name, folder_path, status) VALUES ('Old', '/x', 'failed')")
+    conn.commit()
+    conn.close()
+    out = import_inbox.dismiss(Db(), [
+        {"history_id": 1, "folder_name": "Old"},                                             # a failed one
+        {"key": "h1", "folder_name": "Drop", "folder_path": str(root / "Drop"), "file_count": 3},   # still waiting
+        {"key": "h2", "folder_name": "Else", "folder_path": str(tmp_path / "elsewhere")},    # not ours to record
+    ])
+    assert out["dismissed"] == 2 and len(out["errors"]) == 1
+    conn = Db()._get_connection()
+    rows = conn.execute("SELECT folder_name, folder_hash, status, total_files FROM auto_import_history ORDER BY id").fetchall()
+    conn.close()
+    assert rows == [("Old", None, "rejected", 0), ("Drop", "h1", "rejected", 3)]

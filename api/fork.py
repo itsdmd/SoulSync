@@ -642,3 +642,42 @@ def editor_move():
                                                    db=get_database()))
     except _EDITOR_ERRORS as exc:
         return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/copy", methods=["POST"])
+@admin_only
+def editor_copy():
+    from core.fork import editor
+
+    body = _body()
+    try:
+        return jsonify(success=True, **editor.copy((body.get("paths") or [])[:2000], body.get("destination")))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/editor/delete", methods=["POST"])
+@admin_only
+def editor_delete():
+    """``preview`` only counts what would go; otherwise deletes for good."""
+    from core.fork import editor
+    from database.music_database import get_database
+
+    body = _body()
+    paths = (body.get("paths") or [])[:2000]
+    try:
+        if body.get("preview"):
+            return jsonify(success=True, **editor.describe(paths))
+        return jsonify(success=True, **editor.delete(paths, db=get_database()))
+    except _EDITOR_ERRORS as exc:
+        return _editor_error(exc)
+
+
+@bp.route("/api/fork/import/dismiss", methods=["POST"])
+@admin_only
+def import_dismiss():
+    """Dismiss Import page entries, whatever state they are in (their files stay)."""
+    from core.fork import import_inbox
+    from database.music_database import get_database
+
+    return jsonify(success=True, **import_inbox.dismiss(get_database(), (_body().get("items") or [])[:2000]))

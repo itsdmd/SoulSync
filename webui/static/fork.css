@@ -600,7 +600,7 @@ select.fork-album-input option { background: #181818; }
 }
 .fork-editor-row {
     display: grid;
-    grid-template-columns: minmax(220px, 2.4fr) 1.5fr 1.2fr 1.2fr 60px 80px 100px;
+    grid-template-columns: 22px minmax(220px, 2.4fr) 1.5fr 1.2fr 1.2fr 60px 80px 100px;
     gap: 10px;
     padding: 4px 14px;
     cursor: default;
@@ -675,8 +675,8 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-bad small { color: #f87171; }
 @media (max-width: 900px) {
     .fork-editor-side { width: 180px; }
-    .fork-editor-row { grid-template-columns: minmax(160px, 2fr) 1.2fr 1fr 60px; }
-    .fork-editor-row > span:nth-child(n+5) { display: none; }
+    .fork-editor-row { grid-template-columns: 22px minmax(160px, 2fr) 1.2fr 1fr 60px; }
+    .fork-editor-row > span:nth-child(n+6) { display: none; }
     .fork-editor-panel { flex-direction: column; height: auto; max-height: 55vh; overflow: auto; }
 }
 
@@ -691,3 +691,50 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-node.fork-editor-drop { background: rgba(250, 204, 21, 0.22); outline: 1px dashed #facc15; outline-offset: -1px; }
 .fork-editor-list.fork-editor-drop { background: rgba(250, 204, 21, 0.06); }
 .fork-editor-moveto { margin: 4px 0 10px; word-break: break-all; }
+
+.fork-editor-bar { flex-wrap: wrap; row-gap: 6px; }
+.fork-editor-bar .download-control-btn { padding: 5px 11px; }
+.fork-editor-row input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; cursor: pointer; }
+.fork-editor-row.cut { opacity: 0.45; }
+.fork-editor ~ .fork-album-overlay { z-index: 9100; }
+.fork-editor-menu {
+    position: fixed;
+    z-index: 9200;
+    min-width: 190px;
+    padding: 4px;
+    background: #1b1f24;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+}
+.fork-editor-menu button {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: left;
+    padding: 6px 12px;
+    border-radius: 5px;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+.fork-editor-menu button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.09); }
+.fork-editor-menu button:disabled { color: rgba(255, 255, 255, 0.3); cursor: default; }
+.fork-editor-menu button.danger:not(:disabled) { color: #f87171; }
+.fork-editor .download-control-btn.fork-editor-danger,
+.fork-editor-dialog .download-control-btn.fork-editor-danger { background: #b91c1c; border-color: #dc2626; color: #fff; }
+.fork-editor-tabs { display: flex; gap: 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); margin-bottom: 12px; }
+.fork-editor-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 7px 14px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.fork-editor-tab.active { color: #fff; border-bottom-color: #1db954; }
+.fork-editor-tab:disabled { color: rgba(255, 255, 255, 0.25); cursor: default; }
+.fork-editor-tabpane[hidden] { display: none; }
+.fork-editor-tabpane > .fork-album-input { width: 100%; margin-bottom: 12px; }
