@@ -763,3 +763,4 @@ select.fork-album-input option { background: #181818; }
 .fork-manual-row .fork-album-input { width: 100%; padding: 4px 8px; }
 .fork-manual-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255, 255, 255, 0.5); font-size: 0.76rem; }
 @media (max-width: 800px) { .fork-manual-top { flex-direction: column; } .fork-manual-release { grid-template-columns: 1fr; } }
+.fork-manual-dialog .fork-editor-coverbtns .download-control-btn { padding: 5px 10px; font-size: 0.76rem; min-width: 0; }
