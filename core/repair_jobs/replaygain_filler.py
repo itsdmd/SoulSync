@@ -160,7 +160,7 @@ class ReplayGainFillerJob(RepairJob):
                 continue
 
             try:
-                rg = read_replaygain_tags(resolved)
+                rg = _fork_hooks.filler_file_value(resolved, read_replaygain_tags)
             except Exception as e:
                 logger.debug("[ReplayGain Filler] tag read failed for '%s': %s", title, e)
                 result.skipped += 1
@@ -267,3 +267,27 @@ class ReplayGainFillerJob(RepairJob):
         finally:
             if conn:
                 conn.close()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A scan remembers what it checked for `cache_days`. See core/fork/filler_cache.py
+# and FORK.md.
+from core.fork import hooks as _fork_hooks  # noqa: E402
+
+_upstream_scan = ReplayGainFillerJob.scan
+
+
+def _fork_scan(self, context: JobContext) -> JobResult:
+    with _fork_hooks.filler_cache(context, self.job_id):
+        return _upstream_scan(self, context)
+
+
+ReplayGainFillerJob.scan = _fork_scan
+ReplayGainFillerJob.default_settings = {**ReplayGainFillerJob.default_settings, 'cache_days': 7}
+ReplayGainFillerJob.help_text += (
+    ' '
+    '"cache_days": a scan remembers the ReplayGain tags it read from each file and only '
+    'reads files that are new or changed since. After this many days (default 7) the next '
+    'scan forgets everything and reads the whole library again, so renamed or moved tracks '
+    'leave nothing behind. 0 reads every file on every scan.'
+)

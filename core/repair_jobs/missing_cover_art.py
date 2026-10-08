@@ -272,7 +272,8 @@ class MissingCoverArtJob(RepairJob):
             # source-priority loop below — unchanged behavior for existing users.
             try:
                 from core.metadata.art_lookup import select_preferred_art_url
-                artwork_url = select_preferred_art_url(
+                artwork_url = _fork_hooks.filler_lookup(
+                    'preferred', select_preferred_art_url,
                     artist_name, title,
                     {'musicbrainz_release_id': None}, art_order,
                 )
@@ -533,3 +534,49 @@ class MissingCoverArtJob(RepairJob):
         finally:
             if conn:
                 conn.close()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A scan remembers what it checked for `cache_days`. See core/fork/filler_cache.py
+# and FORK.md.
+from core.fork import hooks as _fork_hooks  # noqa: E402
+
+_upstream_scan = MissingCoverArtJob.scan
+
+
+def _fork_scan(self, context: JobContext) -> JobResult:
+    with _fork_hooks.filler_cache(context, self.job_id):
+        return _upstream_scan(self, context)
+
+
+MissingCoverArtJob.scan = _fork_scan
+MissingCoverArtJob.default_settings = {**MissingCoverArtJob.default_settings, 'cache_days': 7}
+MissingCoverArtJob.help_text += (
+    '\n- '
+    'cache_days: a scan remembers whether the file of each album carries a cover (read again '
+    'when the file changed) and what artwork each source offered. After this many days '
+    '(default 7) the next scan forgets everything and checks the whole library again, so '
+    'renamed or moved albums leave nothing behind. 0 checks everything on every scan.'
+)
+
+_upstream_file_has_embedded_art = file_has_embedded_art
+_upstream_try_source = MissingCoverArtJob._try_source
+_upstream_find_artist_art = MissingCoverArtJob._find_artist_art
+
+
+def file_has_embedded_art(file_path):  # noqa: F811
+    return _fork_hooks.filler_file_value(file_path, _upstream_file_has_embedded_art)
+
+
+def _fork_try_source(self, source, source_album_id, title, artist_name):
+    return _fork_hooks.filler_lookup(
+        source, lambda *key: _upstream_try_source(self, *key), source, source_album_id, title, artist_name)
+
+
+def _fork_find_artist_art(self, artist_name, source_priority):
+    return _fork_hooks.filler_lookup(
+        'artist', lambda *key: _upstream_find_artist_art(self, *key), artist_name, list(source_priority))
+
+
+MissingCoverArtJob._try_source = _fork_try_source
+MissingCoverArtJob._find_artist_art = _fork_find_artist_art

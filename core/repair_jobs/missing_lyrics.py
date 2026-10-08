@@ -143,8 +143,8 @@ class MissingLyricsJob(RepairJob):
             except (TypeError, ValueError):
                 duration_s = None
             try:
-                available = lyrics_client.has_remote_lyrics(
-                    title, artist_name or '', album_title, duration_s)
+                available = _fork_hooks.filler_lookup(
+                    'lrclib', lyrics_client.has_remote_lyrics, title, artist_name or '', album_title, duration_s)
             except Exception as e:
                 logger.debug("[Lyrics Filler] availability check failed for '%s': %s", title, e)
                 available = False
@@ -214,3 +214,27 @@ class MissingLyricsJob(RepairJob):
         finally:
             if conn:
                 conn.close()
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A scan remembers what it checked for `cache_days`. See core/fork/filler_cache.py
+# and FORK.md.
+from core.fork import hooks as _fork_hooks  # noqa: E402
+
+_upstream_scan = MissingLyricsJob.scan
+
+
+def _fork_scan(self, context: JobContext) -> JobResult:
+    with _fork_hooks.filler_cache(context, self.job_id):
+        return _upstream_scan(self, context)
+
+
+MissingLyricsJob.scan = _fork_scan
+MissingLyricsJob.default_settings = {**MissingLyricsJob.default_settings, 'cache_days': 7}
+MissingLyricsJob.help_text += (
+    '\n\nSettings:\n- '
+    'cache_days: a scan remembers what LRClib answered for each track without a lyrics '
+    'file and does not ask again. After this many days (default 7) the next scan forgets '
+    'everything and asks about every such track again, so lyrics added to LRClib since are '
+    'found and renamed or moved tracks leave nothing behind. 0 asks on every scan.'
+)

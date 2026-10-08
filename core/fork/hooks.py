@@ -394,3 +394,39 @@ def after_youtube_download(result: Any, dl: Any) -> None:
         youtube_audio.after_download(result["dest_path"], youtube_fields_from_download(dl or {}))
     except Exception as exc:
         logger.warning("after_youtube_download failed: %s", exc)
+
+
+# ── 22 filler tools: scan cache ─────────────────────────────────────────
+
+def filler_cache(context: Any, job_id: str) -> Any:
+    """A ``with`` block during which a filler's scan is answered from its cache."""
+    import contextlib
+
+    if not _active():
+        return contextlib.nullcontext()
+    try:
+        from core.fork import filler_cache as cache
+
+        manager = getattr(context, "config_manager", None)
+        days = manager.get(f"repair.jobs.{job_id}.settings.cache_days", cache.DEFAULT_DAYS) if manager \
+            else cache.DEFAULT_DAYS
+        return cache.session(job_id, days)
+    except Exception as exc:
+        logger.warning("filler cache hook failed: %s", exc)
+        return contextlib.nullcontext()
+
+
+def filler_file_value(path: Any, read: Any) -> Any:
+    if not _active():
+        return read(path)
+    from core.fork import filler_cache as cache
+
+    return cache.file_value(path, read)
+
+
+def filler_lookup(group: str, fetch: Any, *args: Any) -> Any:
+    if not _active():
+        return fetch(*args)
+    from core.fork import filler_cache as cache
+
+    return cache.lookup(group, fetch, *args)
