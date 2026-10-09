@@ -793,3 +793,12 @@ select.fork-album-input option { background: #181818; }
 .fork-editor-othertag > span:first-child { font-size: 0.74rem; letter-spacing: 0.02em; }
 .fork-editor-tag textarea.fork-album-input { resize: vertical; min-height: 54px; font-family: inherit; }
 .fork-editor-tag .fork-album-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Downloads page: Pause All / Resume All */
+.adl-pause-all-btn.adl-pause-all-on {
+    background: rgba(var(--accent-rgb), 0.15);
+    border-color: rgba(var(--accent-rgb), 0.3);
+    color: rgb(var(--accent-light-rgb));
+}
+.adl-pause-all-btn:disabled { opacity: 0.6; cursor: default; }
+.adl-stat-paused { color: rgb(var(--accent-light-rgb)); }

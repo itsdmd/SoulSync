@@ -730,3 +730,22 @@ def import_manual():
         except Exception as exc:
             logger.debug("staging cache not invalidated: %s", exc)
     return jsonify(success=True, **result)
+
+
+# ── Downloads page: pause all ───────────────────────────────────────────
+
+@bp.route("/api/fork/downloads/pause", methods=["GET"])
+def downloads_pause_state():
+    from core.fork import download_pause
+
+    return jsonify(success=True, **download_pause.state())
+
+
+@bp.route("/api/fork/downloads/pause", methods=["POST"])
+@admin_only
+def downloads_pause_set():
+    """``{"paused": true|false}``: hold every queued download, or let them go."""
+    from core.fork import download_pause
+
+    result = download_pause.pause() if _body().get("paused") else download_pause.resume()
+    return jsonify(success=True, **result)

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AdlDownload } from '../-adl.types';
@@ -447,5 +447,31 @@ describe('AdlHeader', () => {
     const btn = container.querySelector('#adl-cancel-all-btn') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(btn.className).toContain('adl-cancel-all-pending');
+  });
+
+  // fork: Pause All / Resume All
+  it('offers Pause All while work is running and Resume All while paused', () => {
+    const toggle = vi.fn();
+    render(<AdlHeader {...props} />);
+    expect(screen.queryByText('Pause All')).toBeNull();
+
+    cleanup();
+    render(
+      <AdlHeader {...props} hasRunningWork pause={{ paused: false, pending: false, toggle }} />,
+    );
+    fireEvent.click(screen.getByText('Pause All'));
+    expect(toggle).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    // paused with nothing running: the way back must still be there
+    render(
+      <AdlHeader
+        {...props}
+        hasRunningWork={false}
+        pause={{ paused: true, pending: false, toggle }}
+      />,
+    );
+    expect(screen.getByText('Resume All')).toBeInTheDocument();
+    expect(screen.getByText('paused')).toBeInTheDocument();
   });
 });

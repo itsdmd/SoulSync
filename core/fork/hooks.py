@@ -430,3 +430,18 @@ def filler_lookup(group: str, fetch: Any, *args: Any) -> Any:
     from core.fork import filler_cache as cache
 
     return cache.lookup(group, fetch, *args)
+
+
+# ── 25 Downloads: pause all ─────────────────────────────────────────────
+
+def downloads_held(batch_id: str, start: Callable[[str], None]) -> bool:
+    """Whether the batch must wait because downloads are paused."""
+    if not _active():
+        return False
+    try:
+        from core.fork import download_pause
+
+        return download_pause.hold(batch_id, start)
+    except Exception as exc:
+        logger.warning("download pause hook failed: %s", exc)
+        return False

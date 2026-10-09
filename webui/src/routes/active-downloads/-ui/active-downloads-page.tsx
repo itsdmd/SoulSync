@@ -13,6 +13,7 @@ import {
   setDeletedRetention,
 } from '../-adl.api';
 import { batchSummary, isTerminalPhase } from '../-adl.batch';
+import { useForkDownloadsPause } from '../-adl.fork-pause'; // fork
 import { filterDownloads } from '../-adl.fork-search';
 import { formatSpeed, verificationHistoryId, unverifiedKey } from '../-adl.helpers';
 import { useAdlDownloads } from '../-adl.use-downloads';
@@ -79,6 +80,8 @@ export function ActiveDownloadsPage() {
   const reviewing = state.filter === 'unverified';
 
   const refresh = useCallback(() => void downloads.refresh(), [downloads]);
+  /** fork: Pause All / Resume All. */
+  const forkPause = useForkDownloadsPause(refresh);
   const refreshQuarantine = useCallback(
     () => void verification.loadQuarantine(true),
     [verification],
@@ -351,6 +354,7 @@ export function ActiveDownloadsPage() {
             onCancelAll={() => void onCancelAll()}
             onClearCompleted={() => void onClearCompleted()}
             cancelAllPending={cancelAllPending}
+            pause={forkPause}
           />
 
           {state.filterBatchId ? (

@@ -1320,3 +1320,18 @@ def check_batch_completion_v2(batch_id: str, deps: LifecycleDeps) -> Optional[bo
         logger.error(f"[Completion Check V2] Error checking batch completion: {e}")
         traceback.print_exc()
         return False
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# Pause All on the Downloads page: while paused, a batch starts nothing; what
+# was held is started on Resume All. See core/fork/download_pause.py and FORK.md.
+_upstream_start_next_batch_of_downloads = start_next_batch_of_downloads
+
+
+def start_next_batch_of_downloads(batch_id: str, deps: LifecycleDeps) -> None:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    if _fork_hooks.downloads_held(
+            batch_id, lambda held_id: _upstream_start_next_batch_of_downloads(held_id, deps)):
+        logger.info(f"[Batch Manager] Downloads are paused - batch {batch_id} holds its queue")
+        return
+    _upstream_start_next_batch_of_downloads(batch_id, deps)

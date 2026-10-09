@@ -1,3 +1,4 @@
+import type { ForkDownloadsPause } from '../-adl.fork-pause'; // fork
 import type { AdlFilter } from '../-adl.types';
 
 import { ADL_FILTERS } from '../-adl.types';
@@ -54,6 +55,8 @@ export interface AdlHeaderProps {
   onCancelAll: () => void;
   onClearCompleted: () => void;
   cancelAllPending: boolean;
+  /** fork: Pause All / Resume All; the button is absent without it. */
+  pause?: ForkDownloadsPause;
 }
 
 /**
@@ -74,6 +77,7 @@ export function AdlHeader({
   onCancelAll,
   onClearCompleted,
   cancelAllPending,
+  pause, // fork
 }: AdlHeaderProps) {
   const view = viewOf(filter);
   const reviewTab = acoustidEnabled ? REVIEW_TAB : QUARANTINE_ONLY_TAB;
@@ -97,6 +101,7 @@ export function AdlHeader({
           <div className="adl-stat">
             <span className="adl-stat-num">{counts.queued}</span>
             <span className="adl-stat-label">queued</span>
+            {pause?.paused ? <span className="adl-stat-sub adl-stat-paused">paused</span> : null}
           </div>
           <div className={`adl-stat${counts.failed > 0 ? ' adl-stat-bad' : ''}`}>
             <span className="adl-stat-num">{counts.failed}</span>
@@ -108,6 +113,23 @@ export function AdlHeader({
           </div>
         </div>
         <div className="adl-hero-actions">
+          {pause && (pause.paused || hasRunningWork) ? (
+            <button
+              type="button"
+              className={`adl-clear-btn adl-pause-all-btn${pause.paused ? ' adl-pause-all-on' : ''}`}
+              id="adl-pause-all-btn"
+              title={
+                pause.paused
+                  ? 'Start the queued downloads again'
+                  : 'Hold every queued download. Downloads already running finish; a restart of SoulSync resumes by itself.'
+              }
+              disabled={pause.pending}
+              aria-pressed={pause.paused}
+              onClick={pause.toggle}
+            >
+              {pause.paused ? 'Resume All' : 'Pause All'}
+            </button>
+          ) : null}
           {hasRunningWork ? (
             <button
               type="button"
