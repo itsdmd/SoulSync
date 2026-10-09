@@ -7,6 +7,8 @@
   and turns each set into ONE album whose volumes are its discs.
 * **Rating Tag Sync** — copies star ratings between Navidrome and the rating
   tag in the files (``core/fork/rating_sync.py``).
+* **Lyrics Translator** — translates the lyrics files and embedded lyrics the
+  library already has (``core/fork/lyrics_retro.py``).
 
 Only the job classes live here, because this folder is where the framework
 (and its consistency tests) look for jobs; the work is in ``core/fork/jobs.py``.
@@ -15,7 +17,7 @@ default) or applies them straight away; a finding's fix does the same work for
 one item. See FORK.md.
 """
 
-from core.fork import jobs, rating_sync, translate
+from core.fork import filler_cache, jobs, lyrics, lyrics_retro, rating_sync, translate
 from core.fork.cjk import fold
 from core.fork.jobs import is_on, job_settings
 from core.repair_jobs import register_job
@@ -276,3 +278,58 @@ class RatingTagSyncJob(RepairJob):
         return rating_sync.sync(context, JobResult(), direction,
                                 clear_unrated=is_on(settings.get("clear_unrated", False)),
                                 dry_run=is_on(settings.get("dry_run", False)))
+
+
+@register_job
+class LyricsTranslateJob(RepairJob):
+    job_id = lyrics_retro.JOB_ID
+    display_name = "Lyrics Translator"
+    description = "Translates the Chinese, Japanese and Korean lyrics your library already has"
+    help_text = (
+        "New lyrics are translated when they are fetched (LLM & Tagging → Lyrics translation). This "
+        "tool does the same for what is already in the library: for every track it looks at the "
+        ".lrc / .txt file next to it and at the lyrics embedded in its tags, and translates what is "
+        "still untranslated with your local model. Each lyrics text is one request of its own; "
+        "songs are never combined.\n\n"
+        "A track with a lyrics file gets the file translated and the same text embedded. A track "
+        "with only embedded lyrics gets those translated in place; in separate mode the original "
+        "text is saved next to it as <name>.original.lrc (or .txt) so it is not lost.\n\n"
+        "Translated lyrics carry a marker line, so they are recognised wherever the files are "
+        "moved or renamed to and are never translated twice. A cache only saves work: unchanged "
+        "audio files are not opened again, identical lyrics (a single and its album) are sent to "
+        "the model once, and a text the model could not translate is not retried until the cache "
+        "runs out. The tool changes things itself on every run; there is nothing to approve.\n\n"
+        "Settings:\n"
+        "- Mode: separate (default), the lyrics become the translation only and the untranslated "
+        "file is kept as <name>.original.lrc; inline puts each translated line under its original\n"
+        "- Embedded Lyrics: also translate the lyrics in the tags of the audio files (default on)\n"
+        "- Cache Days: lifetime of the cache (default 7; 0 turns it off)\n"
+        "- Dry Run: only list in the log what would be translated; the model is not called"
+    )
+    icon = "repair-icon-tag"
+    default_enabled = False
+    default_interval_hours = 168
+    default_settings = {
+        "mode": lyrics.SEPARATE,
+        "embedded_lyrics": True,
+        "cache_days": filler_cache.DEFAULT_DAYS,
+        "dry_run": False,
+    }
+    setting_options = {"mode": list(lyrics.MODES)}
+    auto_fix = True
+    writes_library_files = True
+
+    def estimate_scope(self, context: JobContext) -> int:
+        try:
+            return len(lyrics_retro.library_tracks(context.db))
+        except Exception:
+            return 0
+
+    def scan(self, context: JobContext) -> JobResult:
+        settings = job_settings(self, context)
+        mode = str(settings.get("mode") or "").strip().lower()
+        return lyrics_retro.run(context, JobResult(),
+                                mode=mode if mode in lyrics.MODES else lyrics.SEPARATE,
+                                embedded=is_on(settings.get("embedded_lyrics", True)),
+                                dry_run=is_on(settings.get("dry_run", False)),
+                                cache_days=settings.get("cache_days", filler_cache.DEFAULT_DAYS))

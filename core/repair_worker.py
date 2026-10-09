@@ -6459,6 +6459,7 @@ JOB_CATEGORIES.update({
     'fork_auto_translate': 'Tags & metadata',
     'fork_volume_grouping': 'Tags & metadata',
     'fork_rating_sync': 'Tags & metadata',
+    'fork_lyrics_translate': 'Artwork & lyrics',
 })
 _upstream_fix_handlers = RepairWorker._fix_handlers
 

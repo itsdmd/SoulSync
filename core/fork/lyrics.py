@@ -19,7 +19,11 @@ _TXT_MARKER_LINE = f"[{MARKER}]"
 _TIMED_RE = re.compile(r"^((?:\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\])+)(.*)$")
 # LRC metadata ("[ar:Artist]", "[length:03:20]") — not lyric text.
 _ID_TAG_RE = re.compile(r"^\[[A-Za-z#][A-Za-z_]*:.*\]\s*$")
-_CHUNK = 40
+# One song is one request; only lyrics longer than this many distinct lines are
+# split, because the model's context could not hold more.
+_CHUNK = 100
+INLINE, SEPARATE = "inline", "separate"
+MODES = (SEPARATE, INLINE)
 
 _SCHEMA = {
     "type": "object",
@@ -48,8 +52,9 @@ def _system_prompt(language: str) -> str:
     )
 
 
-def translate_lines(lines: List[str], title: str = "", artist: str = "") -> Dict[str, str]:
-    """``{original line: translation}`` for the distinct CJK lines given."""
+def translate_lines(lines: List[str], title: str = "", artist: str = "", strict: bool = False) -> Dict[str, str]:
+    """``{original line: translation}`` for the distinct CJK lines given.
+    ``strict`` raises the model's error instead of answering nothing."""
     unique: List[str] = []
     for line in lines:
         text = line.strip()
@@ -73,6 +78,8 @@ def translate_lines(lines: List[str], title: str = "", artist: str = "") -> Dict
                                     temperature=0.3, max_tokens=6000)
         except ollama.OllamaError as exc:
             logger.warning("Lyrics translation failed: %s", exc)
+            if strict:
+                raise
             return {}  # all or nothing: never write a half-translated file
         for item in data.get("lines") or []:
             if not isinstance(item, dict):
@@ -121,6 +128,24 @@ def render(text: str, is_lrc: bool, translations: Dict[str, str], inline: bool) 
     return "\n".join(out) + "\n"
 
 
+def is_timed(text: str) -> bool:
+    """Whether ``text`` is LRC (has timestamped lines)."""
+    return any(_TIMED_RE.match(line) for line in text.splitlines())
+
+
+def needs_translation(text: Optional[str]) -> bool:
+    return bool(text) and MARKER not in text and contains_cjk(text)
+
+
+def bodies(text: str, is_lrc: bool) -> List[str]:
+    """The lyric text of every line, without LRC timestamps and metadata."""
+    return [(_split_timed(line)[1] if is_lrc else line) for line in text.splitlines()]
+
+
+def inline_mode(mode: Optional[str] = None) -> bool:
+    return str(mode or config.get("lyrics.mode") or SEPARATE) == INLINE
+
+
 def find_sidecar(audio_path: str) -> Optional[str]:
     base = os.path.splitext(audio_path)[0]
     for ext in (".lrc", ".txt"):
@@ -151,21 +176,33 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
     if not sidecar:
         return None
     is_lrc = sidecar.lower().endswith(".lrc")
-    inline = str(config.get("lyrics.mode") or "inline") != "separate"
+    inline = inline_mode()
     try:
         with open(sidecar, "r", encoding="utf-8") as fh:
             text = fh.read()
     except (OSError, UnicodeDecodeError) as exc:
         logger.debug("Could not read lyrics %s: %s", sidecar, exc)
         return None
-    if MARKER in text or not contains_cjk(text):
+    if not needs_translation(text):
         return None
 
-    bodies = [(_split_timed(line)[1] if is_lrc else line) for line in text.splitlines()]
-    translations = translate_lines(bodies, title, artist)
+    translations = translate_lines(bodies(text, is_lrc), title, artist)
     if not translations:
         return None
     rendered = render(text, is_lrc, translations, inline)
+    try:
+        write_sidecar(sidecar, rendered, inline)
+    except OSError as exc:
+        logger.warning("Could not write translated lyrics %s: %s", sidecar, exc)
+        return None
+    logger.info("Translated lyrics (%s lines, %s) -> %s", len(translations),
+                "inline" if inline else "original kept as .original", os.path.basename(sidecar))
+    return rendered
+
+
+def write_sidecar(sidecar: str, rendered: str, inline: bool) -> None:
+    """Put ``rendered`` in place of ``sidecar``; unless ``inline``, what was
+    there is kept beside it as ``<name>.original.<ext>``."""
     tmp = f"{sidecar}.fork-tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -177,16 +214,12 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
             if not os.path.exists(backup):
                 os.replace(sidecar, backup)
         os.replace(tmp, sidecar)
-    except OSError as exc:
-        logger.warning("Could not write translated lyrics %s: %s", sidecar, exc)
+    except OSError:
         try:
             os.remove(tmp)
         except OSError:
             pass
-        return None
-    logger.info("Translated lyrics (%s lines, %s) -> %s", len(translations),
-                "inline" if inline else "original kept as .original", os.path.basename(sidecar))
-    return rendered
+        raise
 
 
 _BACKUP_EXTS = (".lrc", ".txt")

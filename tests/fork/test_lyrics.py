@@ -14,7 +14,8 @@ def _write(tmp_path, name, body):
     return str(audio)
 
 
-def test_inline_lrc_repeats_the_timestamp_and_dedupes_model_input(tmp_path, llm):
+def test_inline_lrc_repeats_the_timestamp_and_dedupes_model_input(tmp_path, llm, fork_env):
+    fork_env.set("fork.lyrics.mode", "inline")
     audio = _write(tmp_path, "song.lrc", LRC)
     llm.replies = [_lines("A swarm of bloodthirsty ants")]
     embedded = lyrics.translate_sidecar(audio, "夜曲", "周杰倫")
@@ -87,7 +88,8 @@ def test_separate_mode_plain_text(tmp_path, llm, fork_env):
         "Nocturne", "la la", "[SoulSync LLM translation]"]
 
 
-def test_plain_text_lyrics(tmp_path, llm):
+def test_plain_text_lyrics(tmp_path, llm, fork_env):
+    fork_env.set("fork.lyrics.mode", "inline")
     audio = _write(tmp_path, "song.txt", "夜曲\nla la\n")
     llm.replies = [_lines("Nocturne")]
     lyrics.translate_sidecar(audio)

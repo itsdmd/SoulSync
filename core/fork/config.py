@@ -71,7 +71,7 @@ def defaults() -> Dict[str, Any]:
             # inline: translated line follows each original line in the same
             # file. separate: <name>.lrc holds the translation only and the
             # untranslated lyrics are kept as <name>.original.lrc
-            "mode": "inline",
+            "mode": "separate",
         },
         "artist_names": {
             "enabled": True,

@@ -240,8 +240,8 @@
                     class: 'fork-select',
                     onchange: (e) => { settings.lyrics.mode = e.target.value; },
                 }, [
-                    el('option', { value: 'inline', text: 'Under each original line, same file', selected: settings.lyrics.mode !== 'separate' }),
-                    el('option', { value: 'separate', text: 'Translation only; original kept as .original.lrc', selected: settings.lyrics.mode === 'separate' }),
+                    el('option', { value: 'inline', text: 'Under each original line, same file', selected: settings.lyrics.mode === 'inline' }),
+                    el('option', { value: 'separate', text: 'Translation only; original kept as .original.lrc', selected: settings.lyrics.mode !== 'inline' }),
                 ]),
             ]),
             textRow('Search suggestions per track', 'search_terms.max_variants', '', { type: 'number', min: '0', max: '8' }),
