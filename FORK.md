@@ -194,6 +194,7 @@ its body, so upstream can rewrite the function freely without a conflict.
 | `core/repair_jobs/comma_artist_splitter.py` | EOF block: two extra settings, their options and help text |
 | `core/repair_jobs/__init__.py` | one line: registers `core.repair_jobs.fork_tools` |
 | `core/repair_jobs/album_tag_consistency.py` | EOF wrapper: `_resolve_path` falls back to the shared path resolver |
+| `Dockerfile` | the venv `COPY` (and its two `ENV`) moved below the apt and Deno layers, so those stay cached between builds |
 | `core/downloads/lifecycle.py` | EOF wrapper around `start_next_batch_of_downloads` (holds while paused) |
 | `webui/src/routes/active-downloads/-ui/adl-header.tsx`, `active-downloads-page.tsx` | one optional `pause` prop, the button and the "paused" mark; the hook call in the page |
 | `core/repair_jobs/replaygain_filler.py` | 1 line at the tag read + EOF wrapper around `scan` (scan cache), `cache_days` setting, help text |

@@ -42,11 +42,6 @@ RUN echo "yt-dlp nightly for build ${COMMIT_SHA}" && \
 # Stage 2: Runtime — only runtime dependencies, no build tools
 FROM python:3.11-slim
 
-# Copy pre-built virtualenv from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
 # Set working directory
 WORKDIR /app
 
@@ -77,6 +72,15 @@ RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && \
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash --uid 1000 soulsync
+
+# Copy pre-built virtualenv from builder.
+# fork (itsdmd/SoulSync): moved below the apt and Deno layers. The builder
+# refreshes yt-dlp on every commit, so the venv changes every build; copied
+# above them it invalidated both, and each build downloaded ~136 MB of Debian
+# packages again. Neither layer uses the venv. See FORK.md.
+COPY --from=builder /opt/venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Build-time commit SHA for update detection.
 # Placed here rather than at the top of this stage: the value changes on every
