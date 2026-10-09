@@ -282,7 +282,7 @@ class RatingTagSyncJob(RepairJob):
 
 @register_job
 class LyricsTranslateJob(RepairJob):
-    job_id = lyrics_retro.JOB_ID
+    job_id = 'fork_lyrics_translate'
     display_name = "Lyrics Translator"
     description = "Translates the Chinese, Japanese and Korean lyrics your library already has"
     help_text = (
