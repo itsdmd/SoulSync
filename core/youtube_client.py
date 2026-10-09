@@ -2313,3 +2313,31 @@ class YouTubeClient(DownloadSourcePlugin):
         downloaded_file = self.download(best_match, spotify_track)
 
         return downloaded_file
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# When YouTube answers "Sign in to confirm you're not a bot", stop probing and
+# downloading for a while instead of asking again for every candidate. See
+# core/fork/youtube_gate.py and FORK.md.
+from core.fork import hooks as _fork_hooks  # noqa: E402
+
+_fork_hooks.youtube_watch(logger)
+_upstream_refresh_claimed_quality = YouTubeClient.refresh_claimed_quality
+_upstream_download_sync = YouTubeClient._download_sync
+
+
+def _fork_refresh_claimed_quality(self, candidates, *args, **kwargs):
+    if _fork_hooks.youtube_blocked():
+        return None
+    return _upstream_refresh_claimed_quality(self, candidates, *args, **kwargs)
+
+
+def _fork_download_sync(self, youtube_url, title):
+    if _fork_hooks.youtube_blocked():
+        logger.warning("YouTube is refusing this address; not trying %s (paused, see earlier warning)", title)
+        return None
+    return _upstream_download_sync(self, youtube_url, title)
+
+
+YouTubeClient.refresh_claimed_quality = _fork_refresh_claimed_quality
+YouTubeClient._download_sync = _fork_download_sync

@@ -445,3 +445,27 @@ def downloads_held(batch_id: str, start: Callable[[str], None]) -> bool:
     except Exception as exc:
         logger.warning("download pause hook failed: %s", exc)
         return False
+
+
+# ── 26 YouTube: back off when refused ───────────────────────────────────
+
+def youtube_watch(client_logger: Any) -> None:
+    try:
+        from core.fork import youtube_gate
+
+        youtube_gate.watch(client_logger)
+    except Exception as exc:
+        logger.warning("YouTube gate not installed: %s", exc)
+
+
+def youtube_blocked() -> bool:
+    """Whether YouTube is refusing this address and must be left alone."""
+    if not _active():
+        return False
+    try:
+        from core.fork import youtube_gate
+
+        return youtube_gate.blocked()
+    except Exception as exc:
+        logger.debug("YouTube gate check failed: %s", exc)
+        return False
