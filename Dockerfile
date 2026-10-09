@@ -51,7 +51,12 @@ WORKDIR /app
 # verifies the STREAMINFO MD5 — catches damage that still decodes; #1000).
 # rubberband-cli: sample studio renders saved chops with it. without it the
 # pitch/tempo falls back to librosa, which smears drum hits.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# fork (itsdmd/SoulSync): apt follows deb.debian.org's SRV record to another
+# CDN address, which some networks reach at a few kB/s (this layer then takes
+# over an hour instead of a minute). Without the lookup apt uses the ordinary
+# address. See FORK.md.
+RUN echo 'Acquire::EnableSrvRecords "false";' > /etc/apt/apt.conf.d/99fork-no-srv && \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gosu \
     ffmpeg \
