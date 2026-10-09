@@ -2,6 +2,8 @@
 // artist. An album group has the same shape as an artist group — one album
 // (and/or the singles of one release) — so the nebula and the list render it
 // unchanged; `forkArtist` carries the artist it belongs to. See FORK.md.
+import { apiClient, readJson } from '@/app/api-client';
+
 import type { ParsedWishlistTrack, WishlistArtistGroup } from './-wishlist.types';
 
 export type WishlistGroupBy = 'artist' | 'album';
@@ -119,4 +121,16 @@ export function forkFilterAlbumGroups(
       group.name.toLowerCase().includes(needle) || group.forkArtist.toLowerCase().includes(needle)
     );
   });
+}
+
+/**
+ * Remove the ticked tracks from the wishlist for good — unlike "Skip", which
+ * also puts them on the ignore list. Returns how many were removed.
+ */
+export async function forkRemoveWishlistTracks(trackIds: string[]): Promise<number> {
+  const payload = await readJson<{ success?: boolean; error?: string; removed?: number }>(
+    apiClient.post('wishlist/remove-batch', { json: { spotify_track_ids: trackIds } }),
+  );
+  if (payload.success === false) throw new Error(payload.error || 'Failed');
+  return payload.removed ?? 0;
 }

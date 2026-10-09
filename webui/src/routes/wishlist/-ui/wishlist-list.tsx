@@ -158,7 +158,10 @@ export function WishlistList({
   onBulkAction,
   bulkBusy = false,
   onGrabArtist,
+  onRemoveSelected, // fork
 }: {
+  /** fork: when present, the selection bar gets a "Remove" button. */
+  onRemoveSelected?: (trackIds: string[]) => void;
   /** Keyed by LOWERCASED artist name — buildArtistImageMap's contract. */
   artistImages: Map<string, string>;
   groups: WishlistArtistGroup[];
@@ -329,6 +332,17 @@ export function WishlistList({
           >
             Retry
           </button>
+          {onRemoveSelected ? (
+            <button
+              type="button"
+              className="wl-chip"
+              disabled={selected.size === 0 || bulkBusy}
+              title="Remove the selected tracks from the wishlist (they are not ignored afterwards)"
+              onClick={() => onRemoveSelected([...selected])}
+            >
+              Remove
+            </button>
+          ) : null}
           <button
             type="button"
             className="wl-chip"

@@ -30,6 +30,7 @@ import {
   forkGroupImages,
   forkIsAlbumGroup,
   forkLoadGroupBy,
+  forkRemoveWishlistTracks,
   forkSaveGroupBy,
   type WishlistGroupBy,
 } from '../-wishlist.fork'; // fork
@@ -211,6 +212,30 @@ export function WishlistPage() {
     },
     onError: (error: Error) => window.showToast?.(`Error: ${error.message}`, 'error'),
   });
+
+  // fork: "Remove" on the list's selection bar.
+  const removeSelected = useMutation({
+    mutationFn: (ids: string[]) => forkRemoveWishlistTracks(ids),
+    onSuccess: async (removed, ids) => {
+      window.showToast?.(
+        `Removed ${removed} of ${ids.length} track${ids.length === 1 ? '' : 's'}`,
+        removed === ids.length ? 'success' : 'warning',
+      );
+      await refresh();
+      window.updateWishlistCount?.();
+    },
+    onError: (error: Error) => window.showToast?.(`Error: ${error.message}`, 'error'),
+  });
+  const confirmRemoveSelected = async (ids: string[]) => {
+    const confirmed = await window.showConfirmDialog?.({
+      title: 'Remove Selected',
+      message: `Remove ${ids.length} selected track${ids.length === 1 ? '' : 's'} from the wishlist?`,
+      confirmText: 'Remove',
+      destructive: true,
+    });
+    if (confirmed === false) return;
+    removeSelected.mutate(ids);
+  };
 
   const bulkAction = useMutation({
     // Chunked: the endpoint caps a call at 200 ids, and "grab the artist"
@@ -674,7 +699,8 @@ export function WishlistPage() {
                   onRemoveTrack={(trackId) => removeTrack.mutate(trackId)}
                   onGrabArtist={onGrabArtist}
                   onBulkAction={(action, ids) => bulkAction.mutateAsync({ action, ids })}
-                  bulkBusy={bulkAction.isPending}
+                  bulkBusy={bulkAction.isPending || removeSelected.isPending}
+                  onRemoveSelected={(ids) => void confirmRemoveSelected(ids)}
                 />
               ) : (
                 <div className="wl-nebula">

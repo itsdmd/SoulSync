@@ -176,4 +176,26 @@ describe('WishlistList bulk actions', () => {
       expect(onBulkAction).toHaveBeenCalledWith('grab', ['t1', 't2']);
     });
   });
+
+  // fork: "Remove" hands the ticked ids to the page; absent without the prop.
+  it('offers Remove for the selection only when onRemoveSelected is present', () => {
+    const onBulkAction = async () => ({ success: true });
+    render(<WishlistList {...PROPS} onBulkAction={onBulkAction} />);
+    expect(screen.queryByText('Remove')).toBeNull();
+
+    cleanup();
+    const removed: string[][] = [];
+    render(
+      <WishlistList
+        {...PROPS}
+        onBulkAction={onBulkAction}
+        onRemoveSelected={(ids) => removed.push(ids)}
+      />,
+    );
+    fireEvent.click(screen.getByText('Expand all'));
+    expect(screen.getByText('Remove')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('wl-select-t2'));
+    fireEvent.click(screen.getByText('Remove'));
+    expect(removed).toEqual([['t2']]);
+  });
 });
