@@ -19,6 +19,7 @@ is so the user can correct it before anything is written.
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
@@ -1072,17 +1073,82 @@ def _move(src: str, dst: str) -> None:
         pass
 
 
+def cover_url(album: Dict[str, Any]) -> str:
+    """The release's cover as the metadata source reports it; ``""`` if none."""
+    url = (album or {}).get("image_url")
+    if not url:
+        images = (album or {}).get("images") or []
+        first = images[0] if isinstance(images, list) and images else None
+        url = first.get("url") if isinstance(first, dict) else first
+    return url.strip() if isinstance(url, str) else ""
+
+
+def _cover_image(album: Dict[str, Any], cover: Optional[Dict[str, Any]]) -> Optional[Tuple[bytes, str]]:
+    """The image ``cover`` asks for: ``{"action": "source"}`` is the release's
+    own cover, downloaded; ``{"action": "set", "data": base64}`` an uploaded
+    JPEG/PNG. None when the cover is to stay as it is."""
+    from core.fork import editor
+
+    action = str((cover or {}).get("action") or "keep")
+    if action == "set":
+        try:
+            data = base64.b64decode(str((cover or {}).get("data") or ""), validate=True)
+        except Exception:
+            raise ValueError("The cover could not be read") from None
+        if not data or len(data) > editor.MAX_COVER_BYTES:
+            raise ValueError("The cover is empty or larger than 20 MB")
+        return data, editor._image_mime(data)
+    if action == "source":
+        from core.tag_writer import download_cover_art
+
+        url = cover_url(album)
+        image = download_cover_art(url) if url else None
+        if not image:
+            raise ValueError("The release's cover could not be downloaded" if url else "The release has no cover")
+        return image
+    return None
+
+
+def _embed_cover(path: str, image: Tuple[bytes, str]) -> None:
+    from core.fork import editor
+
+    audio, kind = editor._open(path)
+    if audio.tags is None:
+        audio.add_tags()
+    editor._set_cover(audio, kind, *image)
+    tags._save(audio)
+
+
+def _refresh_cover_files(folders: Any, image: Tuple[bytes, str]) -> None:
+    """A folder that already has a cover file gets the new image too, so the
+    file and the embedded cover do not disagree. None is created."""
+    for folder in folders:
+        old = [n for n in ("cover.jpg", "cover.png") if os.path.isfile(os.path.join(folder, n))]
+        if not old:
+            continue
+        try:
+            for name in old:
+                os.remove(os.path.join(folder, name))
+            with open(os.path.join(folder, "cover.png" if image[1] == "image/png" else "cover.jpg"), "wb") as fh:
+                fh.write(image[0])
+        except OSError as exc:
+            logger.warning("Cover file in %s not updated: %s", folder, exc)
+
+
 def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist: Dict[str, Any],
           tracks: List[Dict[str, Any]], source: str = "", rename: bool = False,
           apply_rules: bool = True, separate_artists: bool = True,
-          fields: Optional[List[str]] = None) -> Dict[str, Any]:
+          fields: Optional[List[str]] = None, cover: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Write tags for each row ``{"rel", "track", "tags"}``; rename when asked.
 
     ``fields`` limits which of the tags are written (None: all of them). A
     row's ``tags`` still names every value, so a rename has the whole picture.
+    ``cover`` also replaces the embedded cover of every row (see
+    :func:`_cover_image`); None leaves the covers alone.
     """
     from core.tag_writer import write_tags_to_file
 
+    image = _cover_image(album, cover)
     real = safe_dir(folder)
     root = root_of(real) or real
     keep_originals = apply_rules and bool(config.get("translate.write_original_tags"))
@@ -1099,7 +1165,7 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
             continue
         all_values = _clean_tags(row.get("tags"))
         values = {k: v for k, v in all_values.items() if k in wanted}
-        if not values:
+        if not values and image is None:
             entry["error"] = "No tag values"
             continue
         album_artist_too = "artist" in values and "albumartist" in wanted
@@ -1141,6 +1207,11 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
                           artists)
         except Exception as exc:
             logger.debug("Extras not written for %s: %s", path, exc)
+        if image is not None:
+            try:
+                _embed_cover(path, image)
+            except Exception as exc:
+                entry["cover_error"] = f"cover not written: {exc}"
         entry["ok"] = True
         written += 1
         if rename:
@@ -1156,6 +1227,9 @@ def apply(folder: str, rows: List[Dict[str, Any]], album: Dict[str, Any], artist
                         moved += 1
             except Exception as exc:
                 entry["rename_error"] = str(exc)
+    if image is not None:
+        _refresh_cover_files({os.path.dirname(r.get("moved_to") or os.path.join(real, r["rel"]))
+                              for r in results if r["ok"] and not r.get("cover_error")}, image)
     new_folder = ""
     if moved:
         # files left the folder: a folder saved for the album follows them

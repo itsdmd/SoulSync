@@ -366,6 +366,25 @@
     align-items: center;
 }
 
+.fork-album-coverrow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.fork-album-coverart {
+    width: 56px;
+    height: 56px;
+    flex: none;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.35);
+}
+.fork-album-coverart img { width: 100%; height: 100%; object-fit: cover; }
+.fork-album-coverart.off { opacity: 0.35; }
+.fork-album-covernote { font-size: 0.8rem; color: rgba(255, 255, 255, 0.6); }
+.fork-album-coverrow .download-control-btn { padding: 5px 10px; font-size: 0.76rem; }
+
 .fork-album-albumrow label {
     display: flex;
     align-items: center;

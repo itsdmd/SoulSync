@@ -699,3 +699,56 @@ def test_album_completeness_does_not_flag_an_album_whole_in_its_saved_folder(lib
         job_module._upstream_scan = saved_scan
     assert created == [3] and out.skipped == 1 and out.findings_skipped_dedup == 0
     assert context.create_finding is original
+
+
+# ── cover ───────────────────────────────────────────────────────────────
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+_ROW = {"rel": "01.flac", "track": 0, "tags": {"title": "Nocturne", "artist": "Jay Chou", "track_number": 1}}
+
+
+def test_apply_embeds_the_release_cover_downloaded_once(library, monkeypatch):
+    import core.tag_writer as tag_writer
+
+    folder = library / "Cover"
+    first = _flac(str(folder / "01.flac"), title="a")
+    second = _flac(str(folder / "02.flac"), title="b")
+    (folder / "cover.jpg").write_bytes(b"old")
+    asked = []
+    monkeypatch.setattr(tag_writer, "download_cover_art", lambda url: asked.append(url) or (_JPEG, "image/jpeg"))
+    album = dict(ALBUM, images=[{"url": "https://img.example/c.jpg"}])
+    result = album_tagging.apply(str(folder), [_ROW, dict(_ROW, rel="02.flac", track=1)], album, ARTIST, TRACKS,
+                                 cover={"action": "source"})
+    assert result["written"] == 2 and asked == ["https://img.example/c.jpg"]
+    assert [p.data for p in FLAC(first).pictures] == [_JPEG] and FLAC(second).pictures[0].mime == "image/jpeg"
+    assert (folder / "cover.jpg").read_bytes() == _JPEG        # an existing cover file follows
+
+
+def test_apply_embeds_an_uploaded_cover_and_no_tag_needs_to_be_ticked(library):
+    import base64
+
+    folder = library / "Upload"
+    path = _flac(str(folder / "01.flac"), title="kept")
+    result = album_tagging.apply(str(folder), [_ROW], ALBUM, ARTIST, TRACKS, fields=[],
+                                 cover={"action": "set", "data": base64.b64encode(_PNG).decode()})
+    audio = FLAC(path)
+    assert result["written"] == 1 and audio["title"] == ["kept"]
+    assert audio.pictures[0].data == _PNG and audio.pictures[0].mime == "image/png"
+    assert not (folder / "cover.png").exists()                   # no cover file is created
+
+
+def test_apply_without_cover_leaves_it_and_a_bad_cover_writes_nothing(library, monkeypatch):
+    import core.tag_writer as tag_writer
+
+    folder = library / "Keep"
+    path = _flac(str(folder / "01.flac"), title="old")
+    album_tagging.apply(str(folder), [_ROW], ALBUM, ARTIST, TRACKS)
+    assert not FLAC(path).pictures and FLAC(path)["title"] == ["Nocturne"]
+    monkeypatch.setattr(tag_writer, "download_cover_art", lambda url: None)
+    for album, cover in ((dict(ALBUM, image_url="https://img.example/x.jpg"), {"action": "source"}),
+                         (dict(ALBUM, image_url="", images=[]), {"action": "source"}),
+                         (ALBUM, {"action": "set", "data": "bm90IGFuIGltYWdl"})):
+        with pytest.raises(ValueError):
+            album_tagging.apply(str(folder), [dict(_ROW, tags={"title": "changed"})], album, ARTIST, TRACKS, cover=cover)
+    assert FLAC(path)["title"] == ["Nocturne"]

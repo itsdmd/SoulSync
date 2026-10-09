@@ -433,7 +433,8 @@ def album_tag_apply():
             source=str(body.get("source") or ""), rename=body.get("rename") is True,
             apply_rules=body.get("apply_rules", True) is not False,
             separate_artists=body.get("semicolons", True) is not False,
-            fields=[str(f) for f in body["fields"]] if isinstance(body.get("fields"), list) else None)
+            fields=[str(f) for f in body["fields"]] if isinstance(body.get("fields"), list) else None,
+            cover=body.get("cover") if isinstance(body.get("cover"), dict) else None)
     except (ValueError, PermissionError, FileNotFoundError) as exc:
         return _folder_error(exc)
     return jsonify(success=True, **data)

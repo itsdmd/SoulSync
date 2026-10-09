@@ -373,7 +373,7 @@
     // The dialog's checkboxes are remembered per browser, so a choice such as
     // "don't translate with the model" holds for the next album too.
     const TAGGER_OPTIONS_KEY = 'soulsync-fork.auto-tag.options';
-    const TAGGER_DEFAULTS = { applyRules: true, translate: true, semicolons: true, rename: false };
+    const TAGGER_DEFAULTS = { applyRules: true, translate: true, semicolons: true, rename: false, cover: true };
 
     // every tag the dialog can write; each has a checkbox, all on by default
     const TAG_KEYS = ['album', 'year'].concat(FIELDS.map((f) => f[0]));
@@ -428,6 +428,52 @@
             label,
         ]);
 
+        // The cover to embed: the release's own unless an image is uploaded.
+        // An upload belongs to this dialog only; the checkbox is remembered.
+        const sourceCover = (process.album && (process.album.image_url
+            || (process.album.images && process.album.images[0] && process.album.images[0].url))) || '';
+        let upload = null;     // {data: base64, preview: data URL}
+        const coverArt = el('div', { class: 'fork-album-coverart' });
+        const coverNote = el('span', { class: 'fork-album-covernote' });
+        const coverReset = el('button', {
+            class: 'download-control-btn secondary', type: 'button', text: 'Use release cover',
+            onclick: () => { upload = null; paintCover(); },
+        });
+        const coverPicker = el('input', {
+            type: 'file', accept: '.jpg,.jpeg,.png,image/jpeg,image/png', hidden: true,
+            onchange: () => {
+                const file = coverPicker.files && coverPicker.files[0];
+                coverPicker.value = '';
+                if (!file) return;
+                if (!/^image\/(jpeg|png)$/.test(file.type)) { toast('The cover must be a JPG or PNG image', 'error'); return; }
+                if (file.size > 20 * 1024 * 1024) { toast('The cover is larger than 20 MB', 'error'); return; }
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const url = String(reader.result);
+                    upload = { data: url.slice(url.indexOf(',') + 1), preview: url };
+                    paintCover();
+                };
+                reader.readAsDataURL(file);
+            },
+        });
+        const coverUpload = el('button', {
+            class: 'download-control-btn secondary', type: 'button', text: 'Upload image…',
+            title: 'Use a JPG or PNG of your own instead of the release cover', onclick: () => coverPicker.click(),
+        });
+        const coverChoice = () => (!opts.cover ? null : upload ? { action: 'set', data: upload.data }
+            : sourceCover ? { action: 'source' } : null);
+        function paintCover() {
+            const shown = upload ? upload.preview : sourceCover;
+            coverArt.replaceChildren(shown ? el('img', { src: shown, alt: 'New cover', loading: 'lazy' }) : el('span', { text: '♪' }));
+            coverArt.classList.toggle('off', !opts.cover);
+            coverNote.textContent = !opts.cover ? 'Covers stay as they are'
+                : upload ? 'Your image' : sourceCover ? 'Release cover' : 'The release has no cover — upload an image';
+            coverUpload.disabled = !opts.cover;
+            coverReset.hidden = !upload || !sourceCover;
+            coverReset.disabled = !opts.cover;
+            refreshStatus();
+        }
+
         // One checkbox per tag: an unticked tag is left as it is in every file.
         const fieldToggle = (key, label) => el('input', {
             type: 'checkbox', checked: opts.fields[key], class: 'fork-album-fieldcb',
@@ -463,6 +509,13 @@
                 check('Also rename/move files to my path format', 'rename',
                     'Off (default): only tags change; files stay where they are.'),
             ]),
+            el('div', { class: 'fork-album-coverrow' }, [
+                coverArt,
+                check('Update cover', 'cover',
+                    'Replaces the cover embedded in every ticked file (and an existing cover.jpg / cover.png in the folder). Off: covers stay as they are.',
+                    () => paintCover()),
+                coverNote, coverUpload, coverReset, coverPicker,
+            ]),
             translateNote,
             body,
             el('div', { class: 'fork-album-actions' }, [
@@ -478,10 +531,13 @@
             if (!data) return;
             const chosen = rows.filter((r) => r.include).length;
             const writing = TAG_KEYS.filter((key) => opts.fields[key]).length;
-            status.textContent = (writing ? `${chosen} of ${rows.length} files will be tagged` : 'No tag is ticked: nothing to write')
+            const cover = !!coverChoice();
+            status.textContent = (writing ? `${chosen} of ${rows.length} files will be tagged`
+                : cover ? `No tag is ticked: only the cover of ${chosen} of ${rows.length} files changes` : 'No tag is ticked: nothing to write')
                 + (writing && writing < TAG_KEYS.length ? ` (${writing} of ${TAG_KEYS.length} tags)` : '')
+                + (writing && cover ? ' · cover updated' : '')
                 + (data.unmatched_tracks.length ? ` · ${data.unmatched_tracks.length} album tracks have no file` : '');
-            applyBtn.disabled = chosen === 0 || writing === 0;
+            applyBtn.disabled = chosen === 0 || (writing === 0 && !cover);
         }
 
         function renderRow(row) {
@@ -651,6 +707,7 @@
                     apply_rules: opts.applyRules,
                     semicolons: opts.semicolons,
                     fields: TAG_KEYS.filter((key) => opts.fields[key]),
+                    cover: coverChoice(),
                     // an unticked tag is sent as the file has it now, so a
                     // rename still builds the path from the real values
                     rows: chosen.map((r) => {
@@ -661,12 +718,12 @@
                         return { rel: r.rel, track: r.track, tags };
                     }),
                 }));
-                const problems = result.results.filter((r) => !r.ok || r.rename_error);
+                const problems = result.results.filter((r) => !r.ok || r.rename_error || r.cover_error);
                 toast(`Tagged ${result.written} file${result.written === 1 ? '' : 's'}`
                     + (result.moved ? `, moved ${result.moved}` : '')
                     + (problems.length ? ` — ${problems.length} with problems` : ''), problems.length ? 'error' : 'success');
                 if (problems.length) {
-                    status.textContent = problems.slice(0, 3).map((p) => `${p.rel}: ${p.error || p.rename_error}`).join(' · ');
+                    status.textContent = problems.slice(0, 3).map((p) => `${p.rel}: ${p.error || p.rename_error || p.cover_error}`).join(' · ');
                     applyBtn.disabled = false;
                     return;
                 }
@@ -678,6 +735,7 @@
             }
         });
 
+        paintCover();
         load();
     }
 
