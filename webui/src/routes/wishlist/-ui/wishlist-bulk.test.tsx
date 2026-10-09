@@ -198,4 +198,22 @@ describe('WishlistList bulk actions', () => {
     fireEvent.click(screen.getByText('Remove'));
     expect(removed).toEqual([['t2']]);
   });
+
+  // fork: "Remove all" on a group row hands the group to the page.
+  it('offers Remove all on a group row only when onRemoveGroup is present', () => {
+    render(<WishlistList {...PROPS} onGrabArtist={() => {}} />);
+    expect(screen.queryByText('Remove all')).toBeNull();
+
+    cleanup();
+    const removed: string[] = [];
+    render(
+      <WishlistList
+        {...PROPS}
+        onGrabArtist={() => {}}
+        onRemoveGroup={(removedGroup) => removed.push(removedGroup.name)}
+      />,
+    );
+    fireEvent.click(screen.getByText('Remove all'));
+    expect(removed).toEqual(['Aphex Twin']);
+  });
 });

@@ -159,7 +159,10 @@ export function WishlistList({
   bulkBusy = false,
   onGrabArtist,
   onRemoveSelected, // fork
+  onRemoveGroup, // fork
 }: {
+  /** fork: when present, each group row gets "Remove all" beside "Grab all". */
+  onRemoveGroup?: (group: WishlistArtistGroup) => void;
   /** fork: when present, the selection bar gets a "Remove" button. */
   onRemoveSelected?: (trackIds: string[]) => void;
   /** Keyed by LOWERCASED artist name — buildArtistImageMap's contract. */
@@ -416,6 +419,20 @@ export function WishlistList({
                 }}
               >
                 <span aria-hidden="true">⬇ </span>Grab all
+              </button>
+            ) : null}
+            {onRemoveGroup ? (
+              <button
+                type="button"
+                className="wlp-sec-grab fork-sec-remove"
+                title={`Remove all ${trackCountLabel(group.total)} of ${group.name} from the wishlist`}
+                aria-label={`Remove all tracks of ${group.name} from the wishlist`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemoveGroup(group);
+                }}
+              >
+                <span aria-hidden="true">✕ </span>Remove all
               </button>
             ) : null}
           </div>

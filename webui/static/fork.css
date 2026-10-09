@@ -802,3 +802,28 @@ select.fork-album-input option { background: #181818; }
 }
 .adl-pause-all-btn:disabled { opacity: 0.6; cursor: default; }
 .adl-stat-paused { color: rgb(var(--accent-light-rgb)); }
+
+/* Wishlist list: "Remove all" beside "Grab all" on a group row */
+.wlp-sec-grab.fork-sec-remove {
+    border-color: rgba(248, 113, 113, 0.35);
+    background: rgba(248, 113, 113, 0.10);
+    color: #f87171;
+}
+.wlp-sec-grab + .fork-sec-remove { margin-left: 0; }
+.wlp-sec-grab.fork-sec-remove:hover {
+    background: rgba(248, 113, 113, 0.22);
+    box-shadow: 0 0 16px rgba(248, 113, 113, 0.3);
+}
+.wlp .wl-list-sep:hover .fork-sec-remove { opacity: 1; transform: none; }
+
+/* Wishlist list: the selection bar (Grab, Skip, Retry…) stays at the top while
+   scrolling. Upstream pins it to the bottom edge, which never takes hold
+   because the bar sits above the rows. */
+.wl-bulkbar,
+.wlp .wl-bulkbar {
+    position: sticky;
+    top: 10px;
+    bottom: auto;
+    z-index: 40;
+}
+.wl-bulkbar { background: rgba(14, 17, 24, 0.94); }

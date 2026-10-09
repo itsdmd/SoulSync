@@ -698,6 +698,7 @@ export function WishlistPage() {
                   onRemoveAlbum={(albumName) => void onRemoveAlbum(albumName)}
                   onRemoveTrack={(trackId) => removeTrack.mutate(trackId)}
                   onGrabArtist={onGrabArtist}
+                  onRemoveGroup={(group) => void onRemoveArtist(group)}
                   onBulkAction={(action, ids) => bulkAction.mutateAsync({ action, ids })}
                   bulkBusy={bulkAction.isPending || removeSelected.isPending}
                   onRemoveSelected={(ids) => void confirmRemoveSelected(ids)}
