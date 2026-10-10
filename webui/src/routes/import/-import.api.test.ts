@@ -70,7 +70,8 @@ describe('import api', () => {
       await expect(pending).resolves.toEqual(result);
       expect(post).toHaveBeenCalledTimes(1);
       expect(get).toHaveBeenCalledTimes(2);
-      expect(get).toHaveBeenCalledWith('import/jobs/job-1245');
+      // fork: the status poll carries its own timeout
+      expect(get).toHaveBeenCalledWith('import/jobs/job-1245', { timeout: 60_000 });
     } finally {
       post.mockRestore();
       get.mockRestore();
