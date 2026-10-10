@@ -44,17 +44,43 @@ _SCHEMA = {
 def _system_prompt(language: str) -> str:
     return (
         f"You translate song lyrics from Chinese, Japanese or Korean into {language}. You receive "
-        "the lyric lines of one song in order, each with an id. Translate every line into natural, "
-        f"singable-sounding {language} that keeps the meaning and tone; use the surrounding lines "
-        "for context. Translate line by line: never merge, split, reorder or skip lines. Keep "
-        "Latin text and names as written. Return only one JSON object: {\"lines\": [{\"id\", "
-        "\"translation\"}]} with exactly one entry per input id and no commentary."
+        "the song's metadata (artist, album, title) followed by the lyric lines of that song in "
+        "order, each with an id. Translate every line into natural, singable-sounding "
+        f"{language} that keeps the meaning and tone; use the surrounding lines for context. "
+        "Translate line by line: never merge, split, reorder or skip lines. Keep Latin text as "
+        "written. If a \"Verified official names\" list is provided, use exactly those forms "
+        "whenever those names appear; otherwise translate or transliterate names yourself. "
+        "Return only one JSON object: {\"lines\": [{\"id\", \"translation\"}]} with exactly one "
+        "entry per input id and no commentary."
     )
 
 
-def translate_lines(lines: List[str], title: str = "", artist: str = "", strict: bool = False) -> Dict[str, str]:
+def metadata_of(audio_path: str) -> Dict[str, str]:
+    """Title, artist and album from the tags of ``audio_path`` (what could be
+    read of them), to send along with its lyrics."""
+    try:
+        from mutagen import File as MutagenFile
+
+        from core.fork import tags
+
+        audio = MutagenFile(audio_path)
+        kind = tags._kind(audio) if audio is not None and audio.tags is not None else ""
+        found = tags._read(audio, kind) if kind else {}
+        return {key: str(found[key]).strip() for key in ("title", "artist", "album") if found.get(key)}
+    except Exception as exc:
+        logger.debug("tags of %s not read: %s", audio_path, exc)
+        return {}
+
+
+def translate_lines(lines: List[str], title: str = "", artist: str = "", strict: bool = False,
+                    album: str = "") -> Dict[str, str]:
     """``{original line: translation}`` for the distinct CJK lines given.
-    ``strict`` raises the model's error instead of answering nothing."""
+    ``strict`` raises the model's error instead of answering nothing.
+
+    The request names the song before its lines — artist, album, title — in
+    that order: a translation proxy in front of the model looks the song up
+    from the start of the request, and long lyrics must not push that out of
+    what it reads."""
     unique: List[str] = []
     for line in lines:
         text = line.strip()
@@ -66,13 +92,9 @@ def translate_lines(lines: List[str], title: str = "", artist: str = "", strict:
     language = str(config.get("translate.target_language") or "English")
     for start in range(0, len(unique), _CHUNK):
         chunk = unique[start:start + _CHUNK]
-        payload: Dict[str, object] = {
-            "lines": [{"id": i, "text": text} for i, text in enumerate(chunk)],
-        }
-        if title:
-            payload["song_title"] = title
-        if artist:
-            payload["artist"] = artist
+        payload: Dict[str, object] = {key: value for key, value in
+                                      (("artist", artist), ("album", album), ("title", title)) if value}
+        payload["lines"] = [{"id": i, "text": text} for i, text in enumerate(chunk)]
         try:
             data = ollama.chat_json("lyrics", _system_prompt(language), payload, _SCHEMA,
                                     temperature=0.3, max_tokens=6000)
@@ -223,7 +245,9 @@ def translate_sidecar(audio_path: str, title: str = "", artist: str = "") -> Opt
     if not needs_translation(text):
         return None
 
-    translations = translate_lines(bodies(text, is_lrc), title, artist)
+    known = metadata_of(audio_path)
+    translations = translate_lines(bodies(text, is_lrc), title or known.get("title", ""),
+                                   artist or known.get("artist", ""), album=known.get("album", ""))
     if not translations:
         return None
     rendered = render(text, is_lrc, translations, inline)

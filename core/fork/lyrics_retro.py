@@ -118,7 +118,7 @@ def _embedded_needs(path: str) -> bool:
 
 # ── translating one text ────────────────────────────────────────────────
 
-def _translate(text: str, is_lrc: bool, title: str, artist: str, inline: bool) -> Optional[str]:
+def _translate(text: str, is_lrc: bool, title: str, artist: str, inline: bool, album: str = "") -> Optional[str]:
     """``text`` translated and rendered, or None when the model's answer was
     not usable. Raises :class:`ollama.OllamaError` when the model failed."""
     lines = lyrics.bodies(text, is_lrc)
@@ -126,7 +126,7 @@ def _translate(text: str, is_lrc: bool, title: str, artist: str, inline: bool) -
     distinct = sorted({line.strip() for line in lines if contains_cjk(line)})
     digest = hashlib.sha1("\n".join([language, *distinct]).encode("utf-8")).hexdigest()  # noqa: S324
     translations = filler_cache.lookup(
-        "model", lambda _digest: lyrics.translate_lines(lines, title, artist, strict=True), digest)
+        "model", lambda _digest: lyrics.translate_lines(lines, title, artist, strict=True, album=album), digest)
     return lyrics.render(text, is_lrc, translations, inline) if translations else None
 
 
@@ -138,6 +138,14 @@ def _keep_original(audio_path: str, text: str, is_lrc: bool) -> None:
         return
     with open(f"{stem}.original{'.lrc' if is_lrc else '.txt'}", "w", encoding="utf-8") as fh:
         fh.write(text if text.endswith("\n") else text + "\n")
+
+
+def _named(audio_path: str, title: str, artist: str, album: str) -> Tuple[str, str, str]:
+    """What the library did not say about the song, from the file's tags."""
+    if title and artist and album:
+        return title, artist, album
+    known = lyrics.metadata_of(audio_path)
+    return title or known.get("title", ""), artist or known.get("artist", ""), album or known.get("album", "")
 
 
 def _read_text(path: str) -> Optional[str]:
@@ -209,7 +217,8 @@ def revert(audio_path: str, embedded: bool = True) -> bool:
 
 
 def translate_track(audio_path: str, title: str = "", artist: str = "", inline: bool = False,
-                    embedded: bool = True, dry_run: bool = False, redo: bool = False) -> Tuple[str, str]:
+                    embedded: bool = True, dry_run: bool = False, redo: bool = False,
+                    album: str = "") -> Tuple[str, str]:
     """Translate the lyrics of one track. Returns ``(outcome, what)``:
     ``done`` / ``would`` (dry run) / ``unusable`` (the model's answer was not
     worth writing) / ``""`` (nothing to do); ``what`` names what was
@@ -234,7 +243,8 @@ def translate_track(audio_path: str, title: str = "", artist: str = "", inline: 
         what = "lyrics file + embedded lyrics" if embedded else "lyrics file"
         if dry_run:
             return "would", what
-        rendered = _translate(side_text, sidecar.lower().endswith(".lrc"), title, artist, inline)
+        title, artist, album = _named(audio_path, title, artist, album)
+        rendered = _translate(side_text, sidecar.lower().endswith(".lrc"), title, artist, inline, album)
         if rendered is None:
             return "unusable", what
         lyrics.write_sidecar(sidecar, rendered, inline)
@@ -260,7 +270,8 @@ def translate_track(audio_path: str, title: str = "", artist: str = "", inline: 
     if dry_run:
         return "would", what
     is_lrc = lyrics.is_timed(text)
-    rendered = _translate(text, is_lrc, title, artist, inline)
+    title, artist, album = _named(audio_path, title, artist, album)
+    rendered = _translate(text, is_lrc, title, artist, inline, album)
     if rendered is None:
         return "unusable", what
     if not inline:
@@ -275,8 +286,8 @@ def library_tracks(db: Any) -> List[Dict[str, Any]]:
     from core.fork import retro
 
     return retro._query(db, """
-        SELECT t.id, t.title, ar.name AS artist, t.file_path
-        FROM tracks t LEFT JOIN artists ar ON ar.id = t.artist_id
+        SELECT t.id, t.title, ar.name AS artist, al.title AS album, t.file_path
+        FROM tracks t LEFT JOIN artists ar ON ar.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id
         WHERE t.file_path IS NOT NULL AND t.file_path != ''
     """, ())
 
@@ -326,7 +337,8 @@ def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool =
             name = f'{track.get("title") or os.path.basename(path)} — {track.get("artist") or "Unknown"}'
             try:
                 outcome, what = translate_track(path, str(track.get("title") or ""), str(track.get("artist") or ""),
-                                                inline=inline, embedded=embedded, dry_run=dry_run, redo=redo)
+                                                inline=inline, embedded=embedded, dry_run=dry_run, redo=redo,
+                                                album=str(track.get("album") or ""))
             except ollama.OllamaError as exc:
                 result.errors += 1
                 failures += 1

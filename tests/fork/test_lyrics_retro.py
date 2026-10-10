@@ -42,9 +42,10 @@ class _DB:
         conn = self._get_connection()
         conn.executescript(
             "CREATE TABLE artists (id TEXT PRIMARY KEY, name TEXT);"
-            "CREATE TABLE tracks (id TEXT PRIMARY KEY, artist_id TEXT, title TEXT, file_path TEXT);"
-            "INSERT INTO artists VALUES ('ar', 'Artist');")
-        conn.executemany("INSERT INTO tracks VALUES (?, 'ar', ?, ?)",
+            "CREATE TABLE albums (id TEXT PRIMARY KEY, title TEXT);"
+            "CREATE TABLE tracks (id TEXT PRIMARY KEY, artist_id TEXT, album_id TEXT, title TEXT, file_path TEXT);"
+            "INSERT INTO artists VALUES ('ar', 'Artist'); INSERT INTO albums VALUES ('al', 'Album (專輯)');")
+        conn.executemany("INSERT INTO tracks VALUES (?, 'ar', 'al', ?, ?)",
                          [(str(n), os.path.basename(f), f) for n, f in enumerate(files)])
         conn.commit()
         conn.close()
@@ -224,3 +225,26 @@ def test_strip_inline_keeps_original_latin_lines_and_lost_originals_are_left_alo
     assert lyrics_retro.is_translated(audio) and lyrics_retro.revert(audio) is False
     assert (tmp_path / "song.lrc").read_text(encoding="utf-8").strip() == TRANSLATED
     assert FLAC(audio)["lyrics"] == [TRANSLATED]
+
+
+def test_the_request_names_the_song_before_its_lines(tmp_path, llm, scan):
+    import json
+
+    audio = _flac(tmp_path / "song.flac", lyrics=LRC)
+    llm.replies = [_reply("A swarm of ants")]
+    scan([audio])
+    task, payload = llm.calls[0]
+    # artist, album, title first: a proxy in front of the model reads only the start of the request
+    assert list(payload) == ["artist", "album", "title", "lines"]
+    assert json.dumps(payload, ensure_ascii=False).startswith('{"artist": "Artist", "album": "Album (專輯)", "title": "song.flac"')
+    assert "Verified official names" in lyrics._system_prompt("English")
+    assert "names as written" not in lyrics._system_prompt("English")
+
+
+def test_a_fetched_lyrics_file_gets_what_the_library_did_not_say_from_the_tags(tmp_path, llm):
+    audio = _flac(tmp_path / "song.flac", artist="周杰倫", album="十一月的蕭邦")
+    (tmp_path / "song.lrc").write_text(LRC, encoding="utf-8")
+    llm.replies = [_reply("A swarm of ants")]
+    assert lyrics.translate_sidecar(audio, "夜曲")
+    assert {k: v for k, v in llm.calls[0][1].items() if k != "lines"} == {
+        "artist": "周杰倫", "album": "十一月的蕭邦", "title": "夜曲"}
