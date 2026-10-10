@@ -40,7 +40,12 @@ export const IMPORT_QUERY_KEY = ['import'] as const;
 const IMPORT_REQUEST_TIMEOUT_MS = 300_000; // 5 min/track
 
 export async function fetchImportInbox(): Promise<ImportInboxPayload> {
-  return readJson<ImportInboxPayload>(apiClient.get('import/inbox'));
+  // fork: listing a large import folder takes longer than ky's 10s default.
+  // Cut off there, the retry found the server's 6s scan cache expired and
+  // started the folder read again, so the page never left "Reading…".
+  return readJson<ImportInboxPayload>(
+    apiClient.get('import/inbox', { timeout: IMPORT_REQUEST_TIMEOUT_MS }),
+  );
 }
 
 export async function fetchImportStagingFiles(): Promise<ImportStagingFilesPayload> {
