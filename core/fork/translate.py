@@ -171,7 +171,8 @@ def enabled(kind: str) -> bool:
 
 def translate_batch(kind: str, items: List[Dict[str, str]], batch_size: int = 10,
                     should_stop: Optional[Callable[[], bool]] = None,
-                    on_progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, str]:
+                    on_progress: Optional[Callable[[int, int], None]] = None,
+                    force: bool = False) -> Dict[str, str]:
     """Translate many names with few model calls.
 
     ``items`` are ``{"original": core text, "artist": ..., "album": ...}``;
@@ -179,6 +180,10 @@ def translate_batch(kind: str, items: List[Dict[str, str]], batch_size: int = 10
     ``batch_size`` names, so the model is loaded once and stays warm for the
     whole run instead of being called once per name. Returns
     ``{original: translation}`` for everything now on record.
+
+    ``force`` asks the model again for names that have a record (retranslate)
+    and returns only what it answered this time. A hand-edited record is never
+    replaced; callers leave those out.
     """
     language = str(config.get("translate.target_language") or "English")
     batch_size = max(1, min(int(batch_size or 10), 50))
@@ -191,7 +196,7 @@ def translate_batch(kind: str, items: List[Dict[str, str]], batch_size: int = 10
             continue
         seen.add(core)
         row = _usable(kind, core, store.find_translation(kind, core))
-        if row and row.get("translated"):
+        if row and row.get("translated") and not force:
             done[core] = str(row["translated"])
         else:
             pending.append({**item, "original": core})

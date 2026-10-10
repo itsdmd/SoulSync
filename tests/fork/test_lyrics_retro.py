@@ -149,3 +149,78 @@ def test_unusable_answer_is_not_asked_again_and_a_dead_model_stops_the_run(tmp_p
     result = scan(files)
     assert result.errors == 3 and "model failed" in result.stopped_early
     assert lyrics.needs_translation(lyrics_retro.read_embedded(files[0]))
+
+
+# ── retranslate ─────────────────────────────────────────────────────────
+
+AGAIN = TRANSLATED.replace("A swarm of ants", "Bloodthirsty ants")
+
+
+def test_retranslate_restores_the_original_file_and_translates_it_again_once(tmp_path, llm, scan, fork_env):
+    audio = _flac(tmp_path / "song.flac", lyrics=LRC)
+    (tmp_path / "song.lrc").write_text(LRC, encoding="utf-8")
+    llm.replies = [_reply("A swarm of ants"), _reply("Bloodthirsty ants")]
+    scan([audio])
+    assert scan([audio]).auto_fixed == 0 and len(llm.calls) == 1          # translated: left alone
+    result = scan([audio], retranslate=True)
+    assert result.auto_fixed == 1 and len(llm.calls) == 2                  # asked again, not from the cache
+    assert (tmp_path / "song.lrc").read_text(encoding="utf-8").strip() == AGAIN
+    assert (tmp_path / "song.original.lrc").read_text(encoding="utf-8") == LRC
+    assert FLAC(audio)["lyrics"] == [AGAIN]
+    # one run only: the setting is off again
+    assert fork_env.get(f"repair.jobs.{lyrics_retro.JOB_ID}.settings")["retranslate"] is False
+
+
+def test_retranslate_takes_an_inline_translation_out_of_the_file_and_the_tags(tmp_path, llm, scan):
+    text = "一群嗜血的螞蟻\nHello\n夜的第七章\n一群嗜血的螞蟻\n"
+    audio = _flac(tmp_path / "song.flac", lyrics=LRC)
+    only_tags = _flac(tmp_path / "tags.flac", unsyncedlyrics=text)
+    (tmp_path / "song.lrc").write_text(LRC, encoding="utf-8")
+    llm.replies = [_reply("A swarm of ants"), _reply("A swarm of ants", "Chapter seven"),
+                   _reply("Bloodthirsty ants"), _reply("Bloodthirsty ants", "The seventh chapter")]
+    scan([audio, only_tags], mode="inline")
+    assert FLAC(only_tags)["unsyncedlyrics"] == [
+        "一群嗜血的螞蟻\nA swarm of ants\nHello\n夜的第七章\nChapter seven\n一群嗜血的螞蟻\nA swarm of ants\n"
+        "[SoulSync LLM translation]"]
+    assert scan([audio, only_tags], mode="inline", retranslate=True).auto_fixed == 2
+    assert (tmp_path / "song.lrc").read_text(encoding="utf-8").splitlines() == [
+        "[re:SoulSync LLM translation]", "[00:01.00]一群嗜血的螞蟻", "[00:01.00]Bloodthirsty ants", "[00:05.50]Hello"]
+    assert FLAC(only_tags)["unsyncedlyrics"] == [
+        "一群嗜血的螞蟻\nBloodthirsty ants\nHello\n夜的第七章\nThe seventh chapter\n一群嗜血的螞蟻\nBloodthirsty ants\n"
+        "[SoulSync LLM translation]"]
+    assert llm.calls[-1][1]["lines"] == llm.calls[1][1]["lines"]         # the model saw the original lines only
+
+
+def test_retranslate_of_tags_only_lyrics_uses_the_kept_original(tmp_path, llm, scan):
+    audio = _flac(tmp_path / "song.flac", unsyncedlyrics="一群嗜血的螞蟻\nHello")
+    llm.replies = [_reply("A swarm of ants"), _reply("Bloodthirsty ants")]
+    scan([audio])
+    assert scan([audio], retranslate=True).auto_fixed == 1
+    assert FLAC(audio)["unsyncedlyrics"] == ["Bloodthirsty ants\nHello\n[SoulSync LLM translation]"]
+    assert (tmp_path / "song.original.txt").read_text(encoding="utf-8") == "一群嗜血的螞蟻\nHello\n"
+
+
+def test_retranslate_dry_run_changes_nothing_and_stays_on(tmp_path, llm, scan, fork_env):
+    audio = _flac(tmp_path / "song.flac", lyrics=LRC)
+    (tmp_path / "song.lrc").write_text(LRC, encoding="utf-8")
+    llm.replies = [_reply("A swarm of ants")]
+    scan([audio])
+    result = scan([audio], retranslate=True, dry_run=True)
+    assert "Would translate lyrics again — song.flac — Artist" in result.log and len(llm.calls) == 1
+    assert (tmp_path / "song.lrc").read_text(encoding="utf-8").strip() == TRANSLATED
+    assert fork_env.get(f"repair.jobs.{lyrics_retro.JOB_ID}.settings")["retranslate"] is True
+
+
+def test_strip_inline_keeps_original_latin_lines_and_lost_originals_are_left_alone(tmp_path):
+    # "Oh yeah" follows a CJK line once, but not at its other occurrence: it is the song's own line
+    inline = "夜的第七章\nOh yeah\n螞蟻\nAnts\n夜的第七章\n螞蟻\nAnts\n[SoulSync LLM translation]\n"
+    assert lyrics.strip_inline(inline, False) == "夜的第七章\nOh yeah\n螞蟻\n夜的第七章\n螞蟻\n"
+    # a provider's own translation shares the timestamp too; only the line right under the original goes
+    lrc = "[re:SoulSync LLM translation]\n[00:01.00]螞蟻\n[00:01.00]Ants\n[00:01.00]Fourmis\n[00:02.00]Hi\n"
+    assert lyrics.strip_inline(lrc, True) == "[00:01.00]螞蟻\n[00:01.00]Fourmis\n[00:02.00]Hi\n"
+    # separate mode, .original deleted: nothing to go back to
+    audio = _flac(tmp_path / "song.flac", lyrics=TRANSLATED)
+    (tmp_path / "song.lrc").write_text(TRANSLATED + "\n", encoding="utf-8")
+    assert lyrics_retro.is_translated(audio) and lyrics_retro.revert(audio) is False
+    assert (tmp_path / "song.lrc").read_text(encoding="utf-8").strip() == TRANSLATED
+    assert FLAC(audio)["lyrics"] == [TRANSLATED]

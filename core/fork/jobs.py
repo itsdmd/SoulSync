@@ -50,6 +50,63 @@ def _rows(db: Any, sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any
 # Auto Translate
 # ═══════════════════════════════════════════════════════════════════════
 
+_NAME_SQL = {
+    "album": "SELECT al.title AS name, ar.name AS artist, al.title AS album, COUNT(t.album_id) AS n "
+             "FROM albums al JOIN artists ar ON ar.id = al.artist_id "
+             "LEFT JOIN tracks t ON t.album_id = al.id GROUP BY al.id",
+    "title": "SELECT t.title AS name, ar.name AS artist, al.title AS album, 1 AS n "
+             "FROM tracks t JOIN albums al ON al.id = t.album_id "
+             "JOIN artists ar ON ar.id = t.artist_id",
+}
+
+
+def retranslatable_names(db: Any, albums: bool = True, titles: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+    """Every saved translation the model made, to be made again.
+
+    Same shape as :func:`untranslated_names`, plus ``previous`` (the
+    translation on record now). A translation edited by hand, and one that
+    came with the name itself ("夜曲 (Nocturne)"), are not the model's and
+    are left out. The artist and album sent along as context are those of
+    the library entry with that name, when there is one.
+    """
+    from core.fork import store
+
+    out: Dict[str, List[Dict[str, Any]]] = {"album": [], "title": []}
+    for kind in [k for k, on in (("album", albums), ("title", titles)) if on]:
+        library: Dict[str, Dict[str, Any]] = {}
+        for row in _rows(db, _NAME_SQL[kind]):
+            name = str(row.get("name") or "")
+            if not contains_cjk(name):
+                continue
+            entry = library.setdefault(fold(split_name(name)[0]), {
+                "artist": row.get("artist") or "", "example": name, "count": 0,
+                "album": "" if kind == "album" else split_name(str(row.get("album") or ""))[0]})
+            entry["count"] += int(row.get("n") or 1)
+        for record in store.list_translations(kind=kind, limit=1_000_000)["items"]:
+            if record.get("user_edited") or record.get("model") == "existing" or not record.get("translated"):
+                continue
+            known = library.get(fold(record["original"]), {})
+            out[kind].append({"original": record["original"], "previous": record["translated"],
+                              "artist": known.get("artist", ""), "album": known.get("album", ""),
+                              "count": known.get("count", 0),
+                              "example": known.get("example") or translate.format_name(record["translated"],
+                                                                                       record["original"])})
+    return out
+
+
+def switch_off(job: RepairJob, context: Any, key: str) -> None:
+    """Turn a one-shot setting of ``job`` off again, so the next scheduled
+    run does not repeat it."""
+    cfg = getattr(context, "config_manager", None)
+    try:
+        if cfg is not None:
+            saved = dict(cfg.get(f"repair.jobs.{job.job_id}.settings", {}) or {})
+            saved[key] = False
+            cfg.set(f"repair.jobs.{job.job_id}.settings", saved)
+    except Exception as exc:
+        logger.warning("could not switch %s off for %s: %s", key, job.job_id, exc)
+
+
 def untranslated_names(db: Any, albums: bool = True, titles: bool = True) -> Dict[str, List[Dict[str, Any]]]:
     """Library names that still read as an untranslated CJK name.
 
@@ -58,15 +115,7 @@ def untranslated_names(db: Any, albums: bool = True, titles: bool = True) -> Dic
     distinct name (Traditional/Simplified spellings counted together).
     """
     out: Dict[str, List[Dict[str, Any]]] = {"album": [], "title": []}
-    sources = []
-    if albums:
-        sources.append(("album", "SELECT al.title AS name, ar.name AS artist, al.title AS album, COUNT(t.album_id) AS n "
-                                 "FROM albums al JOIN artists ar ON ar.id = al.artist_id "
-                                 "LEFT JOIN tracks t ON t.album_id = al.id GROUP BY al.id"))
-    if titles:
-        sources.append(("title", "SELECT t.title AS name, ar.name AS artist, al.title AS album, 1 AS n "
-                                 "FROM tracks t JOIN albums al ON al.id = t.album_id "
-                                 "JOIN artists ar ON ar.id = t.artist_id"))
+    sources = [(kind, _NAME_SQL[kind]) for kind, on in (("album", albums), ("title", titles)) if on]
     for kind, sql in sources:
         seen: Dict[str, Dict[str, Any]] = {}
         for row in _rows(db, sql):
@@ -92,7 +141,8 @@ def untranslated_names(db: Any, albums: bool = True, titles: bool = True) -> Dic
 def apply_translation_finding(db: Any, details: Dict[str, Any]) -> Dict[str, Any]:
     kind, original = str(details.get("kind") or ""), str(details.get("original") or "")
     try:
-        data = retro.apply_translation(db, kind, original, rename=is_on(details.get("rename_files", True)))
+        data = retro.apply_translation(db, kind, original, rename=is_on(details.get("rename_files", True)),
+                                       previous=[str(details["previous"])] if details.get("previous") else None)
     except LookupError:
         return {"success": False, "error": "The saved translation for this name was removed"}
     except Exception as exc:
@@ -104,6 +154,8 @@ def apply_translation_finding(db: Any, details: Dict[str, Any]) -> Dict[str, Any
         message += f', renamed {data["renamed"]}'
     if data["errors"]:
         message += f' ({len(data["errors"])} problem(s))'
+    if data.get("other_albums"):
+        message += f' — {len(data["other_albums"])} file(s) in the album folder carry another album and were left alone'
     if not data["written"]:
         message = "Nothing left to change (already applied, or the files are not in the library folders)"
     return {"success": True, "action": "translation_applied", "message": message, "fixed": data["written"]}

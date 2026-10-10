@@ -20,6 +20,12 @@ only save work:
   translate is not sent again until the cache runs out.
 
 Every lyrics text is its own model request; texts are never combined.
+
+**Retranslate** (:func:`revert`) puts the untranslated lyrics back first, so
+the same pass then translates them again: from the ``.original`` file where
+separate mode kept one, otherwise by taking the added lines out of an inline
+translation (:func:`core.fork.lyrics.strip_inline`). The caches are emptied
+for such a run, so the model is really asked again.
 """
 
 from __future__ import annotations
@@ -134,13 +140,87 @@ def _keep_original(audio_path: str, text: str, is_lrc: bool) -> None:
         fh.write(text if text.endswith("\n") else text + "\n")
 
 
+def _read_text(path: str) -> Optional[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.debug("Could not read lyrics %s: %s", path, exc)
+        return None
+
+
+def _orphan_original(audio_path: str) -> Optional[str]:
+    """The ``.original`` file :func:`_keep_original` wrote for lyrics that
+    only exist in the tags."""
+    stem = os.path.splitext(audio_path)[0]
+    return next((f"{stem}.original{ext}" for ext in (".lrc", ".txt") if os.path.isfile(f"{stem}.original{ext}")), None)
+
+
+def is_translated(audio_path: str, embedded: bool = True) -> bool:
+    """Whether the lyrics file or the embedded lyrics carry a translation."""
+    sidecar = lyrics.find_sidecar(audio_path)
+    if sidecar and lyrics.MARKER in (_read_text(sidecar) or ""):
+        return True
+    try:
+        return embedded and lyrics.MARKER in read_embedded(audio_path)
+    except Exception as exc:
+        logger.debug("embedded lyrics of %s not read: %s", audio_path, exc)
+        return False
+
+
+def revert(audio_path: str, embedded: bool = True) -> bool:
+    """Put the untranslated lyrics of one track back, in the lyrics file and
+    (``embedded``) in the tags, so they can be translated again. Returns
+    whether anything was put back. Lyrics whose original cannot be recovered
+    — the translation replaced it and the ``.original`` file is gone — are
+    left as they are."""
+    changed = False
+    sidecar = lyrics.find_sidecar(audio_path)
+    if sidecar:
+        text = _read_text(sidecar) or ""
+        if lyrics.MARKER in text:
+            backup = lyrics.backup_path(sidecar)
+            if os.path.isfile(backup):
+                os.replace(backup, sidecar)
+                changed = True
+            else:
+                original = lyrics.strip_inline(text, sidecar.lower().endswith(".lrc"))
+                if lyrics.needs_translation(original):
+                    tmp = f"{sidecar}.fork-tmp"
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        fh.write(original)
+                    os.replace(tmp, sidecar)
+                    changed = True
+    if not embedded:
+        return changed
+    text = read_embedded(audio_path)
+    if lyrics.MARKER not in text:
+        return changed
+    if sidecar and lyrics.needs_translation(_read_text(sidecar)):
+        return True         # the tags get the file's new translation
+    orphan = None if sidecar else _orphan_original(audio_path)
+    original = (_read_text(orphan) if orphan else None) or lyrics.strip_inline(text, lyrics.is_timed(text))
+    if not lyrics.needs_translation(original):
+        return changed
+    write_embedded(audio_path, original.strip())
+    if orphan:
+        os.remove(orphan)   # written again, from this text, when it is translated
+    return True
+
+
 def translate_track(audio_path: str, title: str = "", artist: str = "", inline: bool = False,
-                    embedded: bool = True, dry_run: bool = False) -> Tuple[str, str]:
+                    embedded: bool = True, dry_run: bool = False, redo: bool = False) -> Tuple[str, str]:
     """Translate the lyrics of one track. Returns ``(outcome, what)``:
     ``done`` / ``would`` (dry run) / ``unusable`` (the model's answer was not
     worth writing) / ``""`` (nothing to do); ``what`` names what was
     translated. Raises ``OllamaError`` when the model failed, ``OSError`` /
-    mutagen errors when a file could not be written."""
+    mutagen errors when a file could not be written.
+
+    ``redo`` translates lyrics that are translated already once more."""
+    if redo and is_translated(audio_path, embedded):
+        if dry_run:
+            return "would", "lyrics again"
+        revert(audio_path, embedded)
     sidecar = lyrics.find_sidecar(audio_path)
     side_text: Optional[str] = None
     if sidecar:
@@ -202,9 +282,11 @@ def library_tracks(db: Any) -> List[Dict[str, Any]]:
 
 
 def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool = True,
-        dry_run: bool = False, cache_days: Any = filler_cache.DEFAULT_DAYS) -> Any:
+        dry_run: bool = False, cache_days: Any = filler_cache.DEFAULT_DAYS, redo: bool = False) -> Any:
     """Translate the untranslated CJK lyrics of every library track, counting
-    into ``result`` (a ``JobResult``)."""
+    into ``result`` (a ``JobResult``). ``redo`` (Retranslate) also does the
+    translated ones again. ``result.completed`` says the whole library was
+    gone through."""
     from core.fork.rating_sync import _on_disk
 
     def say(line: str, kind: str = "info", **more: Any) -> None:
@@ -221,6 +303,12 @@ def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool =
 
     would = failures = 0
     seen = set()
+    result.completed = False
+    if redo and not dry_run:
+        try:        # what the model answered before must not be answered from the cache
+            filler_cache.clear(JOB_ID)
+        except Exception as exc:
+            logger.warning("lyrics cache not emptied: %s", exc)
     with filler_cache.session(JOB_ID, cache_days):
         for index, track in enumerate(tracks, 1):
             if context.check_stop():
@@ -238,7 +326,7 @@ def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool =
             name = f'{track.get("title") or os.path.basename(path)} — {track.get("artist") or "Unknown"}'
             try:
                 outcome, what = translate_track(path, str(track.get("title") or ""), str(track.get("artist") or ""),
-                                                inline=inline, embedded=embedded, dry_run=dry_run)
+                                                inline=inline, embedded=embedded, dry_run=dry_run, redo=redo)
             except ollama.OllamaError as exc:
                 result.errors += 1
                 failures += 1
@@ -265,6 +353,7 @@ def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool =
                     say(f"The model's answer was not usable, left as it is — {name}", "warning",
                         scanned=index, total=total)
 
+    result.completed = True
     if context.update_progress:
         context.update_progress(total, total)
     say(f"Done — {would} track(s) would be translated (dry run)" if dry_run
@@ -272,4 +361,5 @@ def run(context: Any, result: Any, mode: str = lyrics.SEPARATE, embedded: bool =
     return result
 
 
-__all__ = ["JOB_ID", "library_tracks", "read_embedded", "run", "translate_track", "write_embedded"]
+__all__ = ["JOB_ID", "is_translated", "library_tracks", "read_embedded", "revert", "run", "translate_track",
+           "write_embedded"]

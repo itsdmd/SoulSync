@@ -414,3 +414,105 @@ def test_a_rescan_updates_an_unedited_finding(env, monkeypatch):
     new = jobs.finding_details(group["album"], "HOYO-MiX", group["volumes"], True)
     assert jobs.refresh_volume_finding("fork_volume_grouping", "HOYO-MiX:x", new) is True
     assert read()[2]["volume_numbers"] == "1, 2, 3" and "3 volumes" in read()[1]
+
+
+# ── retranslate ─────────────────────────────────────────────────────────
+
+class _Settings:
+    """A config manager that can be written to, as the real one."""
+
+    def __init__(self, job_id, **settings):
+        self.key, self.saved = f"repair.jobs.{job_id}.settings", settings
+
+    def get(self, key, default=None):
+        return self.saved if key == self.key else default
+
+    def set(self, key, value):
+        assert key == self.key
+        self.saved = value
+
+
+def _translated_library(env):
+    """An album the model translated before, with one title corrected by hand."""
+    db, root = env["db"], env["root"]
+    folder = root / "Jay Chou" / "Chopin of November (十一月的蕭邦)"
+    album = "Chopin of November (十一月的蕭邦)"
+    paths = {}
+    for n, (title, original) in enumerate([("Night Song (夜曲)", "夜曲"), ("My Snow (髮如雪)", "髮如雪")], 1):
+        paths[original] = _flac(str(folder / f"0{n} - {title}.flac"), title=title, album=album,
+                                soulsync_original_title=original, soulsync_original_album="十一月的蕭邦")
+        (folder / f"0{n} - {title}.lrc").write_text("x", encoding="utf-8")
+        db.add("Jay Chou", album, title, n, paths[original])
+    # in the same folder, not in the database: one carries only the old translation, one is another album
+    paths["bare"] = _flac(str(folder / "03 - Bonus.flac"), title="Bonus", album="Chopin of November")
+    paths["other"] = _flac(str(folder / "04 - Guest.flac"), title="Guest", album="Somebody Else's Album")
+    store.save_translation("album", "十一月的蕭邦", "Chopin of November", model="old-model")
+    store.save_translation("title", "夜曲", "Night Song", model="old-model")
+    store.save_translation("title", "髮如雪", "My Snow", user_edited=True)
+    store.save_translation("title", "完了", "Done", model="existing")
+    return paths
+
+
+def test_retranslate_renames_everything_that_carries_the_name_and_switches_itself_off(env, llm):
+    _translated_library(env)
+    llm.replies = [_batch("November's Chopin"), _batch("Nocturne")]
+    ctx = Ctx(env["db"])
+    ctx.config_manager = _Settings("fork_auto_translate", dry_run=False, retranslate=True)
+    result = fork_tools.AutoTranslateJob().scan(ctx)
+    # only what the model made is asked again, with the library's artist as context
+    assert [(p["kind"], p["items"]) for _task, p in llm.calls] == [
+        ("album name", [{"id": 1, "original": "十一月的蕭邦", "artist": "Jay Chou"}]),
+        ("song title", [{"id": 1, "original": "夜曲", "artist": "Jay Chou", "album": "十一月的蕭邦"}])]
+    assert store.get_translation("title", "髮如雪")["translated"] == "My Snow"      # hand-edited: kept
+    assert store.get_translation("title", "完了")["translated"] == "Done"           # came with the name: kept
+    folder = env["root"] / "Jay Chou" / "November's Chopin (十一月的蕭邦)"
+    assert sorted(os.listdir(folder)) == [
+        "01 - Nocturne (夜曲).flac", "01 - Nocturne (夜曲).lrc", "02 - My Snow (髮如雪).flac",
+        "02 - My Snow (髮如雪).lrc", "03 - Bonus.flac", "04 - Guest.flac"]
+    assert not (env["root"] / "Jay Chou" / "Chopin of November (十一月的蕭邦)").exists()
+    song = FLAC(str(folder / "01 - Nocturne (夜曲).flac"))
+    assert song["title"] == ["Nocturne (夜曲)"] and song["soulsync_original_title"] == ["夜曲"]
+    # one album name for the folder and for every file of the album in it
+    albums = {name: FLAC(str(folder / name))["album"][0] for name in os.listdir(folder) if name.endswith(".flac")}
+    assert albums == {"01 - Nocturne (夜曲).flac": "November's Chopin (十一月的蕭邦)",
+                      "02 - My Snow (髮如雪).flac": "November's Chopin (十一月的蕭邦)",
+                      "03 - Bonus.flac": "November's Chopin (十一月的蕭邦)",
+                      "04 - Guest.flac": "Somebody Else's Album"}
+    assert result.auto_fixed == 4 and result.errors == 0
+    assert ctx.config_manager.saved == {"dry_run": False, "retranslate": False}
+    # the library database follows the files
+    rows = retro._query(env["db"], "SELECT file_path FROM tracks ORDER BY track_number", ())
+    assert all(os.path.isfile(row["file_path"]) for row in rows)
+
+
+def test_retranslate_dry_run_proposes_only_what_changed(env, llm):
+    paths = _translated_library(env)
+    llm.replies = [_batch("Chopin of November"), _batch("Nocturne")]        # the album comes out the same
+    ctx = Ctx(env["db"])
+    ctx.config_manager = _Settings("fork_auto_translate", retranslate=True)
+    result = fork_tools.AutoTranslateJob().scan(ctx)
+    assert result.findings_created == 1 and result.auto_fixed == 0
+    finding = ctx.findings[0]
+    assert finding["title"] == "Retranslated title: 夜曲" and finding["entity_id"] == "title:夜曲:Nocturne"
+    assert finding["description"] == '"Night Song (夜曲)" would become "Nocturne (夜曲)"'
+    assert finding["details"]["previous"] == "Night Song"
+    assert FLAC(paths["夜曲"])["title"] == ["Night Song (夜曲)"]                 # files wait for approval
+    assert jobs.apply_translation_finding(env["db"], finding["details"])["fixed"] == 1
+    assert ctx.config_manager.saved["retranslate"] is False
+
+
+def test_without_retranslate_saved_translations_are_not_asked_again(env, llm):
+    _translated_library(env)
+    result = fork_tools.AutoTranslateJob().scan(Ctx(env["db"]))
+    assert llm.calls == [] and result.scanned == 0
+
+
+def test_a_folder_named_after_an_earlier_translation_is_renamed_with_it(env):
+    folder = env["root"] / "Jay Chou" / "Chopin of November [2005]"
+    path = _flac(str(folder / "01.flac"), title="x", album="十一月的蕭邦")
+    env["db"].add("Jay Chou", "十一月的蕭邦", "x", 1, path)
+    store.save_translation("album", "十一月的蕭邦", "November's Chopin", model="m")
+    data = retro.apply_translation(env["db"], "album", "十一月的蕭邦", previous=["Chopin of November"])
+    assert data["renamed"] == 1 and data["errors"] == []
+    assert FLAC(str(env["root"] / "Jay Chou" / "November's Chopin [2005]" / "01.flac"))["album"] == [
+        "November's Chopin (十一月的蕭邦)"]

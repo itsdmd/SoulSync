@@ -128,6 +128,43 @@ def render(text: str, is_lrc: bool, translations: Dict[str, str], inline: bool) 
     return "\n".join(out) + "\n"
 
 
+def strip_inline(text: str, is_lrc: bool) -> str:
+    """``text`` without the translation an inline rendering added: the marker
+    line, and the line under each original line.
+
+    Nothing in the file says which lines were added, so they are recognised
+    by where :func:`render` puts them: a line without CJK text directly under
+    a line with it (in an ``.lrc``: carrying the same timestamp). A line that
+    occurs several times was translated the same way every time, so its
+    follower only counts when every occurrence has that same one — which
+    keeps an original Latin line that merely follows a CJK line once."""
+    rows = [(raw, *(_split_timed(raw) if is_lrc else ("", raw))) for raw in text.splitlines()
+            if raw.strip() not in (_LRC_MARKER_LINE, _TXT_MARKER_LINE)]
+
+    def follower(index: int) -> Optional[str]:
+        if index + 1 >= len(rows):
+            return None
+        _raw, stamp, body = rows[index + 1]
+        if not body.strip() or contains_cjk(body) or (is_lrc and (not stamp or stamp != rows[index][1])):
+            return None
+        return body.strip()
+
+    followers: Dict[str, set] = {}
+    for index, (_raw, _stamp, body) in enumerate(rows):
+        if contains_cjk(body):
+            followers.setdefault(body.strip(), set()).add(follower(index))
+    added = {body for body, seen in followers.items() if len(seen) == 1 and None not in seen}
+    out: List[str] = []
+    skip = False
+    for raw, _stamp, body in rows:
+        if skip:
+            skip = False
+            continue
+        out.append(raw)
+        skip = contains_cjk(body) and body.strip() in added
+    return "\n".join(out) + "\n" if out else ""
+
+
 def is_timed(text: str) -> bool:
     """Whether ``text`` is LRC (has timestamped lines)."""
     return any(_TIMED_RE.match(line) for line in text.splitlines())

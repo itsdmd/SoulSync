@@ -152,6 +152,88 @@ def _album_dir(path: str, old: str) -> Optional[str]:
     return None
 
 
+def _album_home(path: str) -> str:
+    """The folder that holds the album of ``path``: the file's own, or the
+    one above a disc sub-folder."""
+    from core.fork import album_tagging
+
+    folder = os.path.dirname(path)
+    return os.path.dirname(folder) if album_tagging._DISC_DIR_RE.match(os.path.basename(folder)) else folder
+
+
+def _home_files(home: str, limit: int = 2000) -> List[str]:
+    """Audio files of the album folder ``home``: its own and its disc folders'."""
+    from core.fork import album_tagging
+
+    exts = album_tagging._audio_exts()
+    out: List[str] = []
+    try:
+        folders = [home] + sorted(os.path.join(home, d) for d in os.listdir(home)
+                                  if album_tagging._DISC_DIR_RE.match(d) and os.path.isdir(os.path.join(home, d)))
+        for folder in folders:
+            for name in sorted(os.listdir(folder), key=str.casefold):
+                if os.path.splitext(name)[1].lower() in exts and not name.startswith("."):
+                    out.append(os.path.join(folder, name))
+    except OSError as exc:
+        logger.debug("Could not list %s: %s", home, exc)
+    return out[:limit]
+
+
+def _album_tag(path: str) -> Optional[str]:
+    from mutagen import File as MutagenFile
+
+    audio = MutagenFile(path)
+    kind_tag = tags._kind(audio) if audio is not None and audio.tags is not None else ""
+    return str(tags._read(audio, kind_tag).get("album") or "") if kind_tag else None
+
+
+def _replicate_album(plans: List[Dict[str, Any]], original: str,
+                     aliases: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """One album folder, one album name. The files confirmed to be this album
+    decide the name of their folder; every other audio file in it whose album
+    tag is just another spelling of the same album (``aliases``: the bare or
+    an earlier translation, with no original recorded) or is empty gets that
+    name too. Returns ``(plans for those files, files of the folder that
+    carry some other album and were left alone)``."""
+    from collections import Counter
+
+    homes: Dict[str, List[Dict[str, Any]]] = {}
+    for plan in plans:
+        homes.setdefault(_album_home(plan["path"]), []).append(plan)
+    known = {_norm(a) for a in [*aliases, *(p["old"] for p in plans)] if a}
+    wanted = _norm(original)
+    planned = {p["path"] for p in plans}
+    extra: List[Dict[str, Any]] = []
+    other: List[Dict[str, str]] = []
+    for home, group in homes.items():
+        lead = Counter(p["new"] for p in group).most_common(1)[0][0]
+        recorded = next(p["original"] for p in group if p["new"] == lead)
+        files = _home_files(home)
+        mostly_this_album = len(group) * 2 >= len(files)
+        for path in files:
+            if path in planned:
+                continue
+            try:
+                current = _album_tag(path)
+            except Exception as exc:
+                logger.debug("Could not read %s: %s", path, exc)
+                continue
+            if current is None or current == lead:
+                continue
+            if _norm(current) in known or (not current and mostly_this_album):
+                extra.append({"path": path, "field": "album", "old": current, "new": lead,
+                              "original": recorded, "replicated": True})
+            elif _norm(split_name(current)[0]) != wanted:       # same album, other edition: its own name stands
+                other.append({"path": path, "album": current})
+    return extra, other
+
+
+def _is_root(folder: str) -> bool:
+    from core.fork import album_tagging
+
+    return os.path.realpath(folder) in {os.path.realpath(r) for r in album_tagging.allowed_roots()}
+
+
 def _update_db_path(old: str, new: str) -> None:
     try:
         from core.imports.pipeline import _update_moved_track_file_path
@@ -222,11 +304,19 @@ def _folder_files(folder: str, limit: int = 20000) -> List[str]:
 
 def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
                       dry_run: bool = False, folder: Optional[str] = None,
-                      paths: Optional[List[str]] = None) -> Dict[str, Any]:
+                      paths: Optional[List[str]] = None,
+                      previous: Optional[List[str]] = None) -> Dict[str, Any]:
     """Rewrite the title/album tag of every file that is ``original`` to the
     currently stored translation. ``folder`` limits the search to one folder
     (and reaches files the library database does not list); ``paths`` is a
-    pre-scanned file list for callers applying many names to one folder."""
+    pre-scanned file list for callers applying many names to one folder.
+
+    An album is named once and that name goes everywhere: the stored
+    translation makes the name, the album's folder is renamed to it, and it
+    is written to every file of that folder that is this album
+    (:func:`_replicate_album`). ``previous`` are earlier translations of the
+    name (a retranslation knows them): files and folders that carry one of
+    those without the original beside it are recognised by it."""
     from mutagen import File as MutagenFile
 
     if kind not in _FIELD or not original:
@@ -256,19 +346,37 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
                 plan["rename_to"] = (new_stem + os.path.splitext(path)[1]) if new_stem else None
             plans.append(plan)
 
+    earlier = [p for p in (previous or []) if p and p != row["translated"]]
+    other_albums: List[Dict[str, str]] = []
+    if kind == "album" and plans:
+        aliases = [original, row["translated"], translate.format_name(row["translated"], original)]
+        for old in earlier:
+            aliases += [old, translate.format_name(old, original)]
+        replicated, other_albums = _replicate_album(plans, original, aliases)
+        plans += replicated
+
     folders: Dict[str, str] = {}
     if rename and kind == "album":
         for plan in plans:
-            folder = _album_dir(plan["path"], plan["old"])
-            if folder and folder not in folders:
-                new_name = _renamed(os.path.basename(folder), plan["old"], plan["new"])
+            album_dir = _album_dir(plan["path"], plan["old"])
+            if album_dir and album_dir not in folders:
+                new_name = _renamed(os.path.basename(album_dir), plan["old"], plan["new"])
                 if new_name:
-                    folders[folder] = os.path.join(os.path.dirname(folder), new_name)
+                    folders[album_dir] = os.path.join(os.path.dirname(album_dir), new_name)
+        # a folder still named after an earlier translation the tags no longer carry
+        swaps = [(translate.format_name(old, original), translate.format_name(row["translated"], original))
+                 for old in earlier] + [(old, row["translated"]) for old in earlier]
+        for home in {_album_home(p["path"]) for p in plans} - set(folders):
+            if not _is_root(home):
+                new_name = next(filter(None, (_renamed(os.path.basename(home), a, b) for a, b in swaps)), None)
+                if new_name:
+                    folders[home] = os.path.join(os.path.dirname(home), new_name)
 
     result: Dict[str, Any] = {
         "kind": kind, "original": original, "display": translate.format_name(row["translated"], original),
         "files": [{"path": p["path"], "old": p["old"], "new": p["new"], "rename_to": p.get("rename_to")} for p in plans],
         "folders": [{"from": a, "to": b} for a, b in folders.items()],
+        "other_albums": other_albums,
         "checked": len(seen), "unreachable": unreachable, "dry_run": dry_run, "folder": folder or "",
         "written": 0, "renamed": 0, "errors": [],
     }
@@ -307,6 +415,11 @@ def apply_translation(db: Any, kind: str, original: str, rename: bool = True,
             result["renamed"] += 1
         except Exception as exc:
             result["errors"].append(f"{os.path.basename(src)}: rename failed: {exc}")
+            continue
+        try:
+            store.move_album_folders_under(src, dst)     # a folder saved for the album follows
+        except Exception as exc:
+            logger.debug("Saved album folder not updated: %s", exc)
     logger.info("Applied %s translation for %r: %s tag(s), %s rename(s), %s error(s)",
                 kind, original, result["written"], result["renamed"], len(result["errors"]))
     return result
