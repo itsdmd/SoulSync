@@ -25,6 +25,17 @@ logger = get_logger("fork.import_move")
 
 _CHUNK = 1024 * 1024
 _JUNK = {".ds_store", "thumbs.db", "desktop.ini"}
+# Cover art and scans left next to the audio. Nothing imports them, so once
+# the audio is gone they are all that keeps the folder.
+_IMAGES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def _left_behind(folder: str, name: str, images: bool) -> bool:
+    """A file that does not keep a folder: system litter, or (when asked) an image."""
+    if name.lower() in _JUNK:
+        return True
+    return images and os.path.splitext(name)[1].lower() in _IMAGES \
+        and os.path.isfile(os.path.join(folder, name))
 
 
 def staging_root() -> Optional[str]:
@@ -62,18 +73,25 @@ def _digest(path: Path) -> str:
 
 
 def remove_empty_parents(start: str, root: str) -> int:
-    """Remove ``start`` and its parents while they are empty (system litter
-    such as .DS_Store does not count), stopping below ``root``."""
+    """Remove ``start`` and its parents while they are empty, stopping below
+    ``root``. System litter such as .DS_Store does not count, and neither do
+    image files (``import.remove_leftover_images``): a folder holding only
+    those is deleted with them. Anything else in it — audio, a text file, a
+    sub-folder — keeps the folder and everything in it."""
     removed = 0
+    images = bool(config.get("import.remove_leftover_images"))
     root = os.path.normpath(root)
     current = os.path.normpath(start)
     while current != root and current.startswith(root + os.sep):
         try:
             names = os.listdir(current)
-            if any(name.lower() not in _JUNK for name in names):
+            if any(not _left_behind(current, name, images) for name in names):
                 break
             for name in names:
                 os.remove(os.path.join(current, name))
+                if name.lower() not in _JUNK:
+                    logger.info("Removed leftover image from the import folder: %s",
+                                os.path.join(current, name))
             os.rmdir(current)
         except OSError as exc:
             logger.debug("folder %s kept: %s", current, exc)

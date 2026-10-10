@@ -315,6 +315,50 @@ def test_import_copies_verifies_then_deletes_and_clears_empty_folders(staging, t
     assert [p.name for p in dst.parent.iterdir()] == ["01 - song.flac"]  # no temporary file left
 
 
+def test_leftover_cover_images_go_with_the_emptied_folder(staging, tmp_path):
+    from core.imports import file_ops
+
+    album = staging / "Artist" / "Album"
+    (album / "CD1").mkdir()
+    one, two = album / "CD1" / "one.flac", album / "CD1" / "two.flac"
+    one.write_bytes(b"a" * 4000)
+    two.write_bytes(b"b" * 4000)
+    (album / "cover.jpg").write_bytes(b"img")
+    (album / "CD1" / "Back.PNG").write_bytes(b"img")
+
+    file_ops.safe_move_file(str(one), str(tmp_path / "library" / "one.flac"))
+    assert (album / "CD1" / "Back.PNG").exists() and (album / "cover.jpg").exists()  # audio still there
+
+    file_ops.safe_move_file(str(two), str(tmp_path / "library" / "two.flac"))
+    assert list(staging.iterdir()) == []                                              # images and folders gone
+
+
+def test_leftover_images_stay_when_something_else_does_or_the_switch_is_off(staging, tmp_path, monkeypatch):
+    from core.imports import file_ops
+
+    album = staging / "Artist" / "Album"
+    src = album / "song.flac"
+    src.write_bytes(b"a" * 4000)
+    (album / "cover.jpg").write_bytes(b"img")
+    (album / "rip.log").write_text("log")
+    file_ops.safe_move_file(str(src), str(tmp_path / "library" / "song.flac"))
+    assert sorted(p.name for p in album.iterdir()) == ["cover.jpg", "rip.log"]
+
+    (album / "rip.log").unlink()
+    (album / "Scans").mkdir()
+    src.write_bytes(b"a" * 4000)
+    file_ops.safe_move_file(str(src), str(tmp_path / "library" / "song2.flac"))
+    assert sorted(p.name for p in album.iterdir()) == ["Scans", "cover.jpg"]          # a sub-folder keeps it too
+
+    (album / "Scans").rmdir()
+    src.write_bytes(b"a" * 4000)
+    real = import_move.config.get
+    monkeypatch.setattr(import_move.config, "get",
+                        lambda key, default=None: False if key == "import.remove_leftover_images" else real(key, default))
+    file_ops.safe_move_file(str(src), str(tmp_path / "library" / "song3.flac"))
+    assert [p.name for p in album.iterdir()] == ["cover.jpg"]
+
+
 def test_a_copy_that_does_not_match_fails_the_import_and_keeps_the_original(staging, tmp_path, monkeypatch):
     from core.imports import file_ops
 

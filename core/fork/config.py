@@ -109,6 +109,9 @@ def defaults() -> Dict[str, Any]:
             # Files leaving the import folder: copy, compare the copy with the
             # original, then delete the original and the folders left empty.
             "copy_verify": True,
+            # An import sub-folder left with nothing but image files (cover
+            # art, scans) is deleted with them once its audio has gone.
+            "remove_leftover_images": True,
         },
         "paths": {
             # An album by several album artists goes into the folder of the
