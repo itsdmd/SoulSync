@@ -846,3 +846,68 @@ select.fork-album-input option { background: #181818; }
     z-index: 40;
 }
 .wl-bulkbar { background: rgba(14, 17, 24, 0.94); }
+
+/* ── import matcher: wide page, unmatched files as a floating column ──── */
+/* The React page's classes are hashed, so this goes by the ids it carries.
+   Wide screens only; below that the upstream stacked layout stands. */
+@media (min-width: 1200px) {
+    #import-page > div:has(#import-matcher) {
+        max-width: min(1900px, 100%);
+    }
+
+    /* the tracks pane once a release is lined up: track table (then preview
+       and footer) on the left, the files still to place on the right */
+    #import-matcher > section:has(> #import-page-unmatched-pool) {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) clamp(280px, 26%, 420px);
+        column-gap: 18px;
+        align-items: start;
+    }
+
+    #import-matcher > section:has(> #import-page-unmatched-pool) > * {
+        grid-column: 1;
+        min-width: 0;
+    }
+
+    /* stays in view while the track list scrolls, and scrolls on its own */
+    #import-matcher > section > #import-page-unmatched-pool {
+        grid-column: 2;
+        grid-row: 1 / span 4;
+        position: sticky;
+        top: 12px;
+        max-height: calc(100vh - 150px);
+        min-height: 0;
+        padding: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+    }
+
+    #import-page-unmatched-pool > div:first-child {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+    }
+
+    #import-page-unmatched-pool > div:nth-child(2) {
+        flex-direction: column;
+        flex-wrap: nowrap;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 4px;
+    }
+
+    #import-page-unmatched-pool > div:nth-child(2) > button {
+        width: 100%;
+        flex-shrink: 0;
+        justify-content: space-between;
+        text-align: left;
+    }
+
+    /* the whole file name, not an ellipsis: it is what gets matched by eye */
+    #import-page-unmatched-pool > div:nth-child(2) > button > span:first-child {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
