@@ -99,6 +99,7 @@
     }
 
     let page = null;      // the open page's state, or null
+    let tagClip = null;   // tags copied from one file: {from, tags: {name: value}}
     const PANE_KEYS = ['path', 'parent', 'items', 'selected', 'anchor', 'searching', 'truncated', 'query', 'loadSeq', 'listEl', 'crumbEl', 'allBox', 'rows'];
 
     function open() {
@@ -170,6 +171,14 @@
         s.statusEl = el('span', { class: 'fork-album-status' });
         s.saveBtn = el('button', { class: 'download-control-btn primary', type: 'button', text: 'Save', disabled: true, onclick: save });
         s.revertBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Revert', disabled: true, onclick: () => { resetEdits(); paintEditor(); } });
+        s.copyTagsBtn = el('button', {
+            class: 'download-control-btn secondary', type: 'button', text: 'Copy tags ▾', disabled: true,
+            onclick: (e) => showMenu(e, [
+                { label: 'All tags', fn: () => copyTags() },
+                { label: 'Choose tags…', fn: chooseTags },
+            ]),
+        });
+        s.pasteTagsBtn = el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Paste tags', disabled: true, onclick: pasteTags });
 
         s.root = el('div', { class: 'fork-editor', role: 'dialog', 'aria-label': 'Tag Editor' }, [
             el('div', { class: 'fork-editor-head' }, [
@@ -191,7 +200,7 @@
                         s.coverEl,
                         el('div', { class: 'fork-editor-tagbox' }, [
                             s.tagsEl,
-                            el('div', { class: 'fork-album-actions' }, [s.statusEl, s.revertBtn, s.saveBtn]),
+                            el('div', { class: 'fork-album-actions' }, [s.statusEl, s.copyTagsBtn, s.pasteTagsBtn, s.revertBtn, s.saveBtn]),
                         ]),
                     ]),
                 ]),
@@ -873,6 +882,7 @@
             s.coverEl.replaceChildren();
             s.statusEl.textContent = '';
             s.saveBtn.disabled = s.revertBtn.disabled = true;
+            paintTagClip();
             return;
         }
         const rows = [el('div', { class: 'fork-editor-tag fork-editor-taghead' }, [el('span', { text: 'Tag' }), el('span', { text: 'Original value' }), el('span', { text: 'New value' }), el('span')])];
@@ -884,6 +894,8 @@
             for (const name of Object.keys(file.tags)) if (!fixed.has(name)) others.add(name);
             for (const name of file.readonly || []) locked.add(name);
         }
+        // a pasted tag none of these files has yet
+        for (const name of Object.keys(s.edits)) if (!fixed.has(name)) others.add(name);
         const fields = s.fields.concat([...others].sort().map((name) => ({ name, label: name, other: true, locked: locked.has(name) })));
         let headed = false;
         for (const field of fields) {
@@ -986,6 +998,7 @@
         s.saveBtn.disabled = !changes || s.saving;
         s.revertBtn.disabled = !changes || s.saving;
         s.saveBtn.textContent = changes && count > 1 ? `Save to ${count} files` : 'Save';
+        paintTagClip();
     }
 
     async function save() {
@@ -1005,6 +1018,103 @@
         }
         s.saving = false;
         if (page === s) { paintActions(); for (const pane of s.panes) await reload(pane); }
+    }
+
+    // ── copy tags from one file, paste them onto others ──────────────────
+
+    function paintTagClip() {
+        const s = page;
+        const count = (s.tagData && s.tagData.files ? s.tagData.files.length : 0);
+        s.copyTagsBtn.disabled = count !== 1 || !!s.saving;
+        s.copyTagsBtn.title = count === 1 ? 'Copy this file\'s tags and their values, to paste onto other files'
+            : 'Select exactly one audio file to copy its tags';
+        s.pasteTagsBtn.disabled = !tagClip || !count || !!s.saving;
+        const n = tagClip ? Object.keys(tagClip.tags).length : 0;
+        s.pasteTagsBtn.textContent = tagClip ? `Paste ${n} tag${n === 1 ? '' : 's'}` : 'Paste tags';
+        s.pasteTagsBtn.title = tagClip ? `Put the ${n} tag${n === 1 ? '' : 's'} copied from "${tagClip.from}" into the New value column of the selected files: ${Object.keys(tagClip.tags).map(tagLabel).join(', ')}`
+            : 'Copy the tags of a file first';
+    }
+
+    const tagLabel = (name) => ((page.fields.find((f) => f.name === name) || {}).label || name);
+
+    // The one selected file's tags as the New value column shows them (text
+    // tags with a value only), in the editor's order.
+    function copyableTags() {
+        const s = page;
+        const file = s.tagData.files[0];
+        const locked = new Set(file.readonly || []);
+        const fixed = s.fields.map((f) => f.name);
+        const names = fixed.concat(Object.keys(Object.assign({}, file.tags, s.edits)).filter((n) => !fixed.includes(n)).sort());
+        const out = [];
+        for (const name of names) {
+            const value = Object.prototype.hasOwnProperty.call(s.edits, name) ? s.edits[name] : (file.tags[name] || '');
+            if (value && !locked.has(name)) out.push([name, value]);
+        }
+        return out;
+    }
+
+    function copyTags(only) {
+        const s = page;
+        if (!s || !s.tagData || !s.tagData.files || s.tagData.files.length !== 1) return;
+        const tags = copyableTags().filter(([name]) => !only || only.has(name));
+        if (!tags.length) { toast('This file has no tags to copy', 'error'); return; }
+        const file = s.tagData.files[0];
+        tagClip = { from: file.path.slice(file.path.lastIndexOf('/') + 1), tags: Object.fromEntries(tags) };
+        paintTagClip();
+        toast(`${tags.length} tag${tags.length === 1 ? '' : 's'} copied — select the files to paste onto`);
+    }
+
+    function chooseTags() {
+        const s = page;
+        if (!s || !s.tagData || !s.tagData.files || s.tagData.files.length !== 1) return;
+        const tags = copyableTags();
+        if (!tags.length) { toast('This file has no tags to copy', 'error'); return; }
+        const boxes = tags.map(([name]) => el('input', { type: 'checkbox', 'data-name': name, onchange: () => paint() }));
+        const go = el('button', {
+            class: 'download-control-btn primary', type: 'button', text: 'Copy',
+            onclick: () => { copyTags(new Set(boxes.filter((b) => b.checked).map((b) => b.dataset.name))); root.remove(); },
+        });
+        const all = el('input', { type: 'checkbox', onchange: () => { for (const box of boxes) box.checked = all.checked; paint(); } });
+        const paint = () => {
+            const n = boxes.filter((b) => b.checked).length;
+            go.disabled = !n;
+            go.textContent = n ? `Copy ${n} tag${n === 1 ? '' : 's'}` : 'Copy';
+            all.checked = n === boxes.length;
+            all.indeterminate = n > 0 && n < boxes.length;
+        };
+        const root = dialog('fork-editor-rename', [
+            el('h3', { text: 'Copy tags' }),
+            el('label', { class: 'fork-editor-check' }, [all, 'All tags']),
+            el('div', { class: 'fork-editor-picktags' }, tags.map(([name, value], i) => el('label', { class: 'fork-editor-picktag' }, [
+                boxes[i], el('span', { text: tagLabel(name), title: tagLabel(name) }), el('span', { text: value, title: value }),
+            ]))),
+            el('div', { class: 'fork-album-actions' }, [
+                el('button', { class: 'download-control-btn secondary', type: 'button', text: 'Cancel', onclick: () => root.remove() }),
+                go,
+            ]),
+        ]);
+        paint();
+    }
+
+    // Pasted values go into the New value column; Save writes them, Revert drops them.
+    function pasteTags() {
+        const s = page;
+        if (!s || !tagClip || !s.tagData || !s.tagData.files || !s.tagData.files.length || s.saving) return;
+        const locked = new Set();
+        for (const file of s.tagData.files) for (const name of file.readonly || []) locked.add(name);
+        let changed = 0;
+        let skipped = 0;
+        for (const [name, value] of Object.entries(tagClip.tags)) {
+            if (locked.has(name)) { skipped += 1; continue; }
+            const was = original(name);
+            if (!was.mixed && was.value === value) { delete s.edits[name]; continue; }
+            s.edits[name] = value;
+            changed += 1;
+        }
+        paintEditor();
+        const count = s.tagData.files.length;
+        if (!changed) toast(skipped ? 'Nothing pasted: these files hold those tags in a form that cannot be edited here' : 'The selected files already have these values');
+        else toast(`${changed} tag${changed === 1 ? '' : 's'} pasted for ${count} file${count === 1 ? '' : 's'} — Save to write them${skipped ? ` (${skipped} skipped: not editable in these files)` : ''}`);
     }
 
     // ── renaming ─────────────────────────────────────────────────────────

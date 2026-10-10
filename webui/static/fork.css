@@ -689,6 +689,10 @@ select.fork-album-input option { background: #181818; }
 }
 .fork-editor-undo:hover { color: #fff; }
 .fork-editor-rename { width: 520px; }
+.fork-editor-picktags { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.fork-editor-picktag { display: grid; grid-template-columns: 18px 120px 1fr; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+.fork-editor-picktag > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fork-editor-picktag > span:nth-child(2) { color: rgba(255, 255, 255, 0.6); }
 .fork-editor-rename .fork-album-input { width: 100%; }
 .fork-editor-preview { max-height: 40vh; }
 .fork-editor-bad small { color: #f87171; }
