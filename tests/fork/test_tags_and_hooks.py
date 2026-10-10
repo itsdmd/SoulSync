@@ -162,3 +162,25 @@ def test_a_track_the_pipeline_declined_to_file_is_reported_not_counted_as_import
     # upstream's own reasons still win
     assert import_rejection_reason({"_integrity_failure_msg": "truncated", "_context_failure_msg": "x"}) == \
         "integrity check failed: truncated"
+
+
+def test_album_folder_lookup_runs_once_per_album_inside_a_preview(monkeypatch):
+    from core.fork import hooks
+
+    monkeypatch.setenv("SOULSYNC_FORK_TESTING", "1")
+    calls = []
+
+    def resolve(**kwargs):
+        calls.append(kwargs["album_name"])
+        return None
+
+    with hooks.album_preview_scope():
+        for _ in range(3):
+            assert hooks.album_folder_lookup(resolve, {"album_name": "A", "album_artist": "X"}) is None
+        hooks.album_folder_lookup(resolve, {"album_name": "B", "album_artist": "X"})
+    assert calls == ["A", "B"]
+
+    # a real import, outside a preview, is never answered from memory
+    hooks.album_folder_lookup(resolve, {"album_name": "A", "album_artist": "X"})
+    hooks.album_folder_lookup(resolve, {"album_name": "A", "album_artist": "X"})
+    assert calls == ["A", "B", "A", "A"]

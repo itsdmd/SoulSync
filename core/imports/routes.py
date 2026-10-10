@@ -1380,3 +1380,15 @@ def _emit_import_completed(
             )
     except Exception as exc:
         runtime.logger.debug("%s import automation emit failed: %s", log_label, exc)
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# The preview looks the album's existing folder up once, not once per track.
+# See FORK.md (29).
+_upstream_album_preview = album_preview
+
+
+def album_preview(runtime: ImportRouteRuntime, data: Dict[str, Any]) -> tuple[Dict[str, Any], int]:  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    with _fork_hooks.album_preview_scope():
+        return _upstream_album_preview(runtime, data)

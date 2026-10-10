@@ -8,6 +8,7 @@ break a download or an import.
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from utils.logging_config import get_logger
@@ -430,6 +431,50 @@ def filler_lookup(group: str, fetch: Any, *args: Any) -> Any:
     from core.fork import filler_cache as cache
 
     return cache.lookup(group, fetch, *args)
+
+
+# ── 29 import preview: one album-folder lookup per album ────────────────
+
+_preview_memo = threading.local()
+
+
+def album_preview_scope() -> Any:
+    """A ``with`` block for one import preview. Inside it, the "does this album
+    already have a folder" lookup is answered once per album instead of once
+    per track: on an album the library does not have, every miss runs the
+    whole fuzzy library search again, minutes of CPU for a long track list."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _scope():
+        previous = getattr(_preview_memo, "answers", None)
+        _preview_memo.answers = {}
+        try:
+            yield
+        finally:
+            _preview_memo.answers = previous
+
+    return _scope() if _active() else contextlib.nullcontext()
+
+
+_ALBUM_FOLDER_KEY = ("transfer_dir", "album_name", "album_artist", "spotify_album_id", "active_server",
+                     "expected_track_count", "musicbrainz_release_id", "disambiguation",
+                     "incoming_album_type")
+
+
+def album_folder_lookup(resolve: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
+    """``resolve(**kwargs)``, remembered for the rest of the preview it runs in.
+    Outside a preview (a real import) nothing is remembered."""
+    answers = getattr(_preview_memo, "answers", None)
+    if answers is None:
+        return resolve(**kwargs)
+    try:
+        key = tuple(str(kwargs.get(name) or "") for name in _ALBUM_FOLDER_KEY)
+    except Exception:  # noqa: BLE001 - an odd argument only costs the shortcut
+        return resolve(**kwargs)
+    if key not in answers:
+        answers[key] = resolve(**kwargs)
+    return answers[key]
 
 
 # ── 25 Downloads: pause all ─────────────────────────────────────────────

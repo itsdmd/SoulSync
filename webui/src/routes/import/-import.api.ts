@@ -130,7 +130,11 @@ async function runImportJob(path: string, json: unknown): Promise<ImportProcessP
     await new Promise((resolve) => setTimeout(resolve, 1000));
     let job: ImportJobResponse;
     try {
-      job = await readJson<ImportJobResponse>(apiClient.get(`import/jobs/${accepted.job_id}`));
+      // fork: a busy server can sit on this for longer than ky's 10s default;
+      // three of those in a row reported a running import as failed.
+      job = await readJson<ImportJobResponse>(
+        apiClient.get(`import/jobs/${accepted.job_id}`, { timeout: 60_000 }),
+      );
       failures = 0;
     } catch (error) {
       failures += 1;

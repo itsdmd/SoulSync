@@ -324,4 +324,16 @@ def resolve_existing_album_folder(
     return None
 
 
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# An import preview asks this once per track with the same album; the fork
+# answers the repeats from the first one. See FORK.md (29).
+_upstream_resolve_existing_album_folder = resolve_existing_album_folder
+
+
+def resolve_existing_album_folder(**kwargs):  # noqa: F811
+    from core.fork import hooks as _fork_hooks
+    return _fork_hooks.album_folder_lookup(_upstream_resolve_existing_album_folder, kwargs)
+
+
 __all__ = ["resolve_existing_album_folder"]
