@@ -62,15 +62,18 @@ import {
 } from './import-shared';
 import { UploadZone } from './upload-zone';
 
-/** live states poll fast; a quiet inbox with the worker off can wait */
+/**
+ * fork: no reload on a timer. The list is only followed while something on
+ * it is in flight (the folder being read, an item identifying / importing);
+ * otherwise it changes on Refresh.
+ */
 function pollInterval(payload: ImportInboxPayload | undefined): number | false {
   if (!payload) return false;
   if (payload.scanning) return 1500;
   const busy = payload.items?.some((item) =>
     ['identifying', 'importing', 'queued'].includes(item.status),
   );
-  if (busy || payload.worker?.current_status !== 'idle') return 3000;
-  return payload.worker?.running ? 8000 : 20000;
+  return busy ? 3000 : false;
 }
 
 export function Inbox({
