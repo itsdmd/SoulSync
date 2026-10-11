@@ -802,3 +802,21 @@ def download_cover_art(album_info: dict, target_dir: str, context: dict = None, 
             logger.warning("cover.jpg write blocked — read-only filesystem: %s", cover_path)
         else:
             logger.error("Error downloading cover.jpg: %s", exc)
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# "Download cover.jpg to album folder": a PNG cover is preferred and saved as
+# cover.png. See FORK.md (33).
+_upstream_fetch_art_bytes = _fetch_art_bytes
+_upstream_download_cover_art = download_cover_art
+
+
+def _fetch_art_bytes(art_url: str):  # noqa: F811
+    from core.fork import cover_png as _fork_cover_png
+    return _fork_cover_png.fetch_art(_upstream_fetch_art_bytes, art_url)
+
+
+def download_cover_art(album_info: dict, target_dir: str, context: dict = None, force: bool = False):  # noqa: F811
+    from core.fork import cover_png as _fork_cover_png
+    return _fork_cover_png.download(_upstream_download_cover_art, album_info, target_dir, context, force)
+

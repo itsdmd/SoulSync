@@ -113,6 +113,11 @@ def defaults() -> Dict[str, Any]:
             # art, scans) is deleted with them once its audio has gone.
             "remove_leftover_images": True,
         },
+        "cover": {
+            # The cover file written into an album folder is cover.png when the
+            # art source has a PNG (or the cover is PNG data), else cover.jpg.
+            "prefer_png": True,
+        },
         "paths": {
             # An album by several album artists goes into the folder of the
             # first one ("A/A, B - Album"), not a folder of its own ("A, B/…").

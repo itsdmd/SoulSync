@@ -244,3 +244,19 @@ def apply_art_to_album_files(
             if cover_ctx.get("_cover_read_only"):
                 result["read_only_fs"] = True
     return result
+
+
+# ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
+# A cover.jpg extracted from embedded PNG art is renamed cover.png. See FORK.md (33).
+_upstream_apply_art_to_album_files = apply_art_to_album_files
+
+
+def apply_art_to_album_files(file_paths, metadata, album_info, folder=None, context=None):  # noqa: F811
+    from core.fork import cover_png as _fork_cover_png
+    paths = list(file_paths or [])
+    result = _upstream_apply_art_to_album_files(paths, metadata, album_info, folder=folder, context=context)
+    if paths and _fork_cover_png.enabled():
+        target = folder if (folder and os.path.isdir(folder)) else os.path.dirname(paths[0])
+        _fork_cover_png.settle(target)
+    return result
+
