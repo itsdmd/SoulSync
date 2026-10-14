@@ -11,6 +11,7 @@ import {
   reasonBadge,
   unverifiedReasonText,
 } from '../-adl.helpers';
+import { ProgressiveMore, useProgressive } from '../../../platform/progressive.fork'; // fork
 import { RowArt } from './adl-row';
 
 /** Relative time via the shared vanilla formatter; '' when unavailable. */
@@ -358,9 +359,12 @@ export function AdlQuarantineList({
   /** Delete a whole group of candidates at once; absent = per-row deletes only. */
   onDeleteGroup?: (entry: AdlQuarantineEntry, count: number) => void;
 }) {
+  // fork: a window of the groups; the other attempts of a group are only
+  // built while that group is open
+  const window = useProgressive(groups, '', 80);
   return (
     <>
-      {groups.map((group) => {
+      {window.shown.map((group) => {
         const [first, ...rest] = group.members;
         if (!first) return null;
         if (rest.length === 0) {
@@ -410,19 +414,22 @@ export function AdlQuarantineList({
               <div className="verif-quar-alt-heading">
                 Other {rest.length === 1 ? 'attempt' : `${rest.length} attempts`} at this track
               </div>
-              {rest.map((entry) => (
-                <AdlQuarantineRow
-                  key={entry.id}
-                  entry={entry}
-                  open={openDetails.has(entry.id)}
-                  onToggle={() => onToggleDetails(entry.id)}
-                  handlers={handlersFor(entry)}
-                />
-              ))}
+              {isOpen
+                ? rest.map((entry) => (
+                    <AdlQuarantineRow
+                      key={entry.id}
+                      entry={entry}
+                      open={openDetails.has(entry.id)}
+                      onToggle={() => onToggleDetails(entry.id)}
+                      handlers={handlersFor(entry)}
+                    />
+                  ))
+                : null}
             </div>
           </div>
         );
       })}
+      <ProgressiveMore remaining={window.remaining} onMore={window.more} noun="more tracks" />
     </>
   );
 }
@@ -831,6 +838,25 @@ function RetentionSelect({
   );
 }
 
+/** fork: the bin's rows, a window at a time. */
+function DeletedRows({
+  entries,
+  handlersFor,
+}: {
+  entries: AdlDeletedEntry[];
+  handlersFor: (entry: AdlDeletedEntry) => DeletedRowHandlers;
+}) {
+  const window = useProgressive(entries, '', 80);
+  return (
+    <>
+      {window.shown.map((entry) => (
+        <AdlDeletedRow key={entry.id} entry={entry} handlers={handlersFor(entry)} />
+      ))}
+      <ProgressiveMore remaining={window.remaining} onMore={window.more} noun="more files" />
+    </>
+  );
+}
+
 export function AdlDeletedList({
   entries,
   totalSize,
@@ -869,9 +895,7 @@ export function AdlDeletedList({
         </span>
         <RetentionSelect keepDays={keepDays} onKeepDays={onKeepDays} />
       </div>
-      {entries.map((entry) => (
-        <AdlDeletedRow key={entry.id} entry={entry} handlers={handlersFor(entry)} />
-      ))}
+      <DeletedRows entries={entries} handlersFor={handlersFor} />
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   ParsedWishlistTrack,
@@ -10,6 +10,7 @@ import type {
 import { forkArtistOf, forkIsAlbumGroup } from '../-wishlist.fork'; // fork
 import { trackCountLabel } from '../-wishlist.helpers';
 import { openWishlistInspector } from '../../../features/downloads/inspector-modal';
+import { ProgressiveMore, useProgressive } from '../../../platform/progressive.fork'; // fork
 
 /**
  * The dense LIST view — the nebula's operational twin (Boulder: "alternative
@@ -41,21 +42,25 @@ function sortGroups(groups: WishlistArtistGroup[], sort: WishlistListSort): Wish
   );
 }
 
-function TrackRow({
+const TrackRow = memo(function TrackRow({
   track,
   onRemoveTrack,
   onRemoveAlbum,
-  selection,
+  selectable,
+  checked,
+  onToggle,
   outcome,
 }: {
   track: ParsedWishlistTrack;
   onRemoveTrack: (trackId: string) => void;
   /** Present only on album rows — the ✕ on the album cell removes the set. */
   onRemoveAlbum?: (albumName: string) => void;
-  /** When present, renders the bulk-selection checkbox column. The boolean is
-      shiftKey: shift-click selects the whole visible range, like every mail
-      client and file manager. */
-  selection?: { checked: boolean; onToggle: (range: boolean) => void } | null;
+  /** fork: plain props (not one fresh object per render) so rows can be memoised.
+      `onToggle`'s boolean is shiftKey: shift-click selects the whole visible
+      range, like every mail client and file manager. */
+  selectable?: boolean;
+  checked?: boolean;
+  onToggle?: (id: string, range: boolean) => void;
   /** Per-item outcome of the last bulk action — rendered in the status cell. */
   outcome?: { ok: boolean; message: string } | null;
 }) {
@@ -67,18 +72,18 @@ function TrackRow({
   return (
     <div
       className={`wl-list-track${track.failing ? ' wl-list-track--failing' : ''}${
-        selection ? ' wl-list-track--select' : ''
+        selectable ? ' wl-list-track--select' : ''
       }`}
     >
-      {selection ? (
+      {selectable ? (
         <input
           type="checkbox"
           className="wl-list-check"
-          checked={selection.checked}
+          checked={Boolean(checked)}
           // Click carries shiftKey for range-select; change is a noop because
           // the controlled `checked` flips in the click handler, which fires
           // first. Keyboard (Space) also fires click, with shiftKey false.
-          onClick={(event) => selection.onToggle(event.shiftKey)}
+          onClick={(event) => onToggle?.(track.id, event.shiftKey)}
           onChange={() => {}}
           aria-label={`Select ${track.track} by ${track.artist}`}
           data-testid={`wl-select-${track.id}`}
@@ -147,6 +152,51 @@ function TrackRow({
       </span>
     </div>
   );
+});
+
+/** fork: a group's rows, a window at a time. */
+function GroupRows({
+  group,
+  onRemoveTrack,
+  onRemoveAlbum,
+  selectable,
+  selected,
+  onToggle,
+  outcomes,
+}: {
+  group: WishlistArtistGroup;
+  onRemoveTrack: (trackId: string) => void;
+  onRemoveAlbum: (albumName: string) => void;
+  selectable: boolean;
+  selected: Set<string>;
+  onToggle: (id: string, range: boolean) => void;
+  outcomes: Record<string, { ok: boolean; message: string }>;
+}) {
+  const rows = useMemo(
+    () => [
+      ...group.albums.flatMap((album) => album.tracks.map((track) => ({ track, album: true }))),
+      ...group.singles.map((track) => ({ track, album: false })),
+    ],
+    [group],
+  );
+  const window = useProgressive(rows, group.name);
+  return (
+    <>
+      {window.shown.map(({ track, album }) => (
+        <TrackRow
+          key={track.id}
+          track={track}
+          onRemoveTrack={onRemoveTrack}
+          onRemoveAlbum={album ? onRemoveAlbum : undefined}
+          selectable={selectable}
+          checked={selected.has(track.id)}
+          onToggle={onToggle}
+          outcome={outcomes[track.id] ?? null}
+        />
+      ))}
+      <ProgressiveMore remaining={window.remaining} onMore={window.more} noun="more tracks" />
+    </>
+  );
 }
 
 export function WishlistList({
@@ -181,15 +231,29 @@ export function WishlistList({
 }) {
   const [sort, setSort] = useState<WishlistListSort>('failing');
   const sorted = useMemo(() => sortGroups(groups, sort), [groups, sort]);
+  // fork: only a window of the artists is on the page at once
+  const artistWindow = useProgressive(sorted, `${sort}|${filterActive}`, 40);
+  // fork: the page's handlers are new functions on every render; rows get
+  // stable wrappers around the latest ones so they can skip re-rendering
+  const handlers = useRef({ onRemoveTrack, onRemoveAlbum });
+  handlers.current = { onRemoveTrack, onRemoveAlbum };
+  const stableRemoveTrack = useCallback((id: string) => handlers.current.onRemoveTrack(id), []);
+  const stableRemoveAlbum = useCallback((name: string) => handlers.current.onRemoveAlbum(name), []);
   // Collapsed by default: the page opens as a compact artist INDEX (name,
   // count, failing badge) instead of a hundred-row scroll. null = the
   // explicit all-expanded state.
   const [openArtists, setOpenArtists] = useState<Set<string> | null>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [lastCheckedId, setLastCheckedId] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<Record<string, { ok: boolean; message: string }>>({});
   const allOpen = openArtists === null;
-  const isOpen = (name: string) => filterActive || allOpen || openArtists.has(name);
+  // fork: a filter opens the matches only while there are few of them; a
+  // filter that leaves thousands of tracks would otherwise open every artist
+  const matchedTracks = useMemo(
+    () => groups.reduce((sum, group) => sum + group.total, 0),
+    [groups],
+  );
+  const autoOpen = filterActive && matchedTracks <= 300;
+  const isOpen = (name: string) => autoOpen || allOpen || openArtists.has(name);
   const toggleArtist = (name: string) =>
     setOpenArtists((current) => {
       const next = new Set(current ?? sorted.map((g) => g.name));
@@ -222,7 +286,11 @@ export function WishlistList({
     });
   }, [allIds]);
 
-  const toggleSelected = (id: string, range: boolean) => {
+  const visibleIdsRef = useRef<string[]>([]);
+  const lastCheckedRef = useRef<string | null>(null);
+  const toggleSelected = useCallback((id: string, range: boolean) => {
+    const visibleIds = visibleIdsRef.current;
+    const lastCheckedId = lastCheckedRef.current;
     setSelected((prev) => {
       const next = new Set(prev);
       if (range && lastCheckedId && lastCheckedId !== id) {
@@ -240,20 +308,21 @@ export function WishlistList({
       else next.add(id);
       return next;
     });
-    setLastCheckedId(id);
-  };
+    lastCheckedRef.current = id;
+  }, []);
 
   // Flat id order of the rows actually on screen — the shift-click range
   // walks this, so collapsed artists contribute nothing.
   const visibleIds = useMemo(() => {
     const ids: string[] = [];
     for (const g of sorted) {
-      if (!(filterActive || allOpen || openArtists?.has(g.name))) continue;
+      if (!(autoOpen || allOpen || openArtists?.has(g.name))) continue;
       for (const album of g.albums) for (const t of album.tracks) ids.push(t.id);
       for (const t of g.singles) ids.push(t.id);
     }
     return ids;
-  }, [sorted, filterActive, allOpen, openArtists]);
+  }, [sorted, autoOpen, allOpen, openArtists]);
+  visibleIdsRef.current = visibleIds;
 
   const runBulk = async (action: WishlistBulkAction) => {
     if (!onBulkAction || selected.size === 0 || bulkBusy) return;
@@ -267,11 +336,6 @@ export function WishlistList({
       // Transport error — the page's mutation already toasted it.
     }
   };
-
-  const selectionProps = (id: string) =>
-    onBulkAction
-      ? { checked: selected.has(id), onToggle: (range: boolean) => toggleSelected(id, range) }
-      : null;
 
   return (
     <div className="wl-list" data-testid="wishlist-list">
@@ -362,7 +426,7 @@ export function WishlistList({
           box — at 100 tracks nested cards read as an outline document, not a
           track list (Boulder: 'looks wack'). Album context lives IN each row;
           removing a whole album is the ✕ on its album cell. */}
-      {sorted.map((group) => (
+      {artistWindow.shown.map((group) => (
         <div className="wl-list-section" key={group.name}>
           <div
             className="wl-list-sep"
@@ -437,31 +501,24 @@ export function WishlistList({
             ) : null}
           </div>
 
-          {isOpen(group.name) &&
-            group.albums.flatMap((album) =>
-              album.tracks.map((track) => (
-                <TrackRow
-                  key={track.id}
-                  track={track}
-                  onRemoveTrack={onRemoveTrack}
-                  onRemoveAlbum={onRemoveAlbum}
-                  selection={selectionProps(track.id)}
-                  outcome={outcomes[track.id] ?? null}
-                />
-              )),
-            )}
-          {isOpen(group.name) &&
-            group.singles.map((track) => (
-              <TrackRow
-                key={track.id}
-                track={track}
-                onRemoveTrack={onRemoveTrack}
-                selection={selectionProps(track.id)}
-                outcome={outcomes[track.id] ?? null}
-              />
-            ))}
+          {isOpen(group.name) ? (
+            <GroupRows
+              group={group}
+              onRemoveTrack={stableRemoveTrack}
+              onRemoveAlbum={stableRemoveAlbum}
+              selectable={Boolean(onBulkAction)}
+              selected={selected}
+              onToggle={toggleSelected}
+              outcomes={outcomes}
+            />
+          ) : null}
         </div>
       ))}
+      <ProgressiveMore
+        remaining={artistWindow.remaining}
+        onMore={artistWindow.more}
+        noun="more artists"
+      />
     </div>
   );
 }

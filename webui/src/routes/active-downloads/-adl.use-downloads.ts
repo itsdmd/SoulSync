@@ -50,6 +50,39 @@ export interface AdlDownloadsController {
 
 const TERMINAL_PHASES = ['complete', 'cancelled', 'error'];
 
+/**
+ * fork: the poll returns a fresh copy of every row every 2 seconds. Rows that
+ * did not change keep their previous object, so memoised rows skip rendering
+ * and a poll that changed nothing does not re-render the list at all.
+ */
+function reuseUnchanged<T extends object>(
+  prev: readonly T[],
+  next: T[],
+  keyOf: (item: T) => string | undefined,
+  /** Hand back the previous ARRAY too when nothing changed. Off for batches:
+   *  their fade-out is evaluated against the clock on every poll. */
+  keepArray = true,
+): T[] {
+  if (prev.length === 0 || next.length === 0) return next;
+  const before = new Map<string, T>();
+  for (const item of prev) {
+    const key = keyOf(item);
+    if (key !== undefined) before.set(key, item);
+  }
+  let identical = prev.length === next.length;
+  const merged = next.map((item, index) => {
+    const key = keyOf(item);
+    const old = key === undefined ? undefined : before.get(key);
+    if (old && JSON.stringify(old) === JSON.stringify(item)) {
+      if (prev[index] !== old) identical = false;
+      return old;
+    }
+    identical = false;
+    return item;
+  });
+  return identical && keepArray ? (prev as T[]) : merged;
+}
+
 function isTerminal(phase: string): boolean {
   return TERMINAL_PHASES.includes(phase);
 }
@@ -99,8 +132,12 @@ export function useAdlDownloads({
       ...prev,
       // A failed poll returns {} — keep what is on screen rather than blanking
       // the page for one bad response.
-      downloads: data.downloads ?? prev.downloads,
-      batches: data.batches ?? prev.batches,
+      downloads: data.downloads
+        ? reuseUnchanged(prev.downloads, data.downloads, (d) => d.task_id)
+        : prev.downloads,
+      batches: data.batches
+        ? reuseUnchanged(prev.batches, data.batches, (b) => b.batch_id, false)
+        : prev.batches,
       loaded: true,
     }));
   }, []);

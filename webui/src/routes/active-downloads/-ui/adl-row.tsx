@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 
 import type { AdlDownload, AdlTaskDetail } from '../-adl.types';
 
@@ -152,7 +152,9 @@ export interface AdlRowProps {
   compact?: boolean;
 }
 
-export function AdlRow({
+// fork: memoised — with the page's stable handlers and rows that keep their
+// object between polls, a 2 s poll re-renders only the rows that changed.
+export const AdlRow = memo(function AdlRow({
   dl,
   onCancel,
   onDownloadNext,
@@ -416,4 +418,4 @@ export function AdlRow({
       ) : null}
     </div>
   );
-}
+});

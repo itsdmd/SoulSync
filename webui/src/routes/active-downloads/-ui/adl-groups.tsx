@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import type { RateSample } from '../-adl.helpers';
 import type { AdlBatch, AdlBatchHistoryEntry, AdlDownload } from '../-adl.types';
@@ -13,6 +13,7 @@ import {
   statLine,
 } from '../-adl.batch';
 import { batchColorIndex, batchEta, statusClass } from '../-adl.helpers';
+import { ProgressiveMore, useProgressive } from '../../../platform/progressive.fork'; // fork
 import { AdlRow } from './adl-row';
 
 function queueOrder(row: AdlDownload): number {
@@ -106,6 +107,25 @@ function BucketFold({
   );
 }
 
+/** fork: a long run of rows, a window at a time. */
+function RowsWindow({
+  rows,
+  resetKey,
+  render,
+}: {
+  rows: AdlDownload[];
+  resetKey: string;
+  render: (dl: AdlDownload) => ReactNode;
+}) {
+  const window = useProgressive(rows, resetKey, 100);
+  return (
+    <>
+      {window.shown.map(render)}
+      <ProgressiveMore remaining={window.remaining} onMore={window.more} noun="more tracks" />
+    </>
+  );
+}
+
 /**
  * What a mid-flight batch actually shows: the rows that are MOVING and the
  * rows that BROKE, in full. The queue and the done pile are facts, not
@@ -148,8 +168,11 @@ function BucketedRows({
             open={openBuckets.has('queued')}
             onToggle={() => onToggleBucket('queued')}
           />
-          {openBuckets.has('queued')
-            ? queued.map((dl) => (
+          {openBuckets.has('queued') ? (
+            <RowsWindow
+              rows={queued}
+              resetKey="queued"
+              render={(dl) => (
                 <AdlRow
                   key={dl.task_id}
                   dl={dl}
@@ -157,8 +180,9 @@ function BucketedRows({
                   onCancel={onCancelRow}
                   onDownloadNext={onDownloadNext}
                 />
-              ))
-            : null}
+              )}
+            />
+          ) : null}
         </>
       ) : null}
       {done.length > 0 ? (
@@ -169,9 +193,13 @@ function BucketedRows({
             open={openBuckets.has('done')}
             onToggle={() => onToggleBucket('done')}
           />
-          {openBuckets.has('done')
-            ? done.map((dl) => <AdlRow key={dl.task_id} dl={dl} compact onCancel={onCancelRow} />)
-            : null}
+          {openBuckets.has('done') ? (
+            <RowsWindow
+              rows={done}
+              resetKey="done"
+              render={(dl) => <AdlRow key={dl.task_id} dl={dl} compact onCancel={onCancelRow} />}
+            />
+          ) : null}
         </>
       ) : null}
     </>
@@ -425,15 +453,19 @@ export function AdlGroup({
               onDownloadNext={onDownloadNext}
             />
           ) : (
-            orderedRows.map((dl) => (
-              <AdlRow
-                key={dl.task_id}
-                dl={dl}
-                compact
-                onCancel={onCancelRow}
-                onDownloadNext={onDownloadNext}
-              />
-            ))
+            <RowsWindow
+              rows={orderedRows}
+              resetKey={batch.batch_id}
+              render={(dl) => (
+                <AdlRow
+                  key={dl.task_id}
+                  dl={dl}
+                  compact
+                  onCancel={onCancelRow}
+                  onDownloadNext={onDownloadNext}
+                />
+              )}
+            />
           )}
           {rows.length === 0 && batch.phase === 'album_downloading' ? (
             <div className="adl-group-note">
@@ -755,6 +787,19 @@ export function AdlGroupedList({
     shownBatches = shownBatches.filter((b) => rows.some((dl) => dl.batch_id === b.batch_id));
   }
   const earlier = rows.filter((dl) => !dl.batch_id || !batchIds.has(dl.batch_id));
+  // fork: rows of each batch picked out once, not by a scan per batch
+  const rowsByBatch = new Map<string, AdlDownload[]>();
+  for (const dl of rows) {
+    const list = rowsByBatch.get(dl.batch_id);
+    if (list) list.push(dl);
+    else rowsByBatch.set(dl.batch_id, [dl]);
+  }
+  const allRowsByBatch = new Map<string, AdlDownload[]>();
+  for (const dl of allRows) {
+    const list = allRowsByBatch.get(dl.batch_id);
+    if (list) list.push(dl);
+    else allRowsByBatch.set(dl.batch_id, [dl]);
+  }
 
   if (batches.length === 0 && rows.length === 0) {
     return (
@@ -771,8 +816,8 @@ export function AdlGroupedList({
         <AdlGroup
           key={batch.batch_id}
           batch={batch}
-          rows={rows.filter((dl) => dl.batch_id === batch.batch_id)}
-          allBatchRows={allRows.filter((dl) => dl.batch_id === batch.batch_id)}
+          rows={rowsByBatch.get(batch.batch_id) ?? []}
+          allBatchRows={allRowsByBatch.get(batch.batch_id) ?? []}
           bucketed={!statusFiltered && !filterBatchId && !searching}
           searching={searching}
           filtered={filterBatchId === batch.batch_id}

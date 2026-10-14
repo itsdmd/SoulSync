@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useMemo, useState } from 'react';
 
 import type { AdlBatch, AdlDeletedEntry, AdlDownload, AdlQuarantineEntry } from '../-adl.types';
 import type { ReviewActionHandlers } from './adl-review';
@@ -42,6 +42,7 @@ import {
   unverifiedDelete,
   unverifiedPlay,
 } from '../-adl.verif-actions';
+import { ProgressiveMore, useProgressive } from '../../../platform/progressive.fork'; // fork
 import { AdlClientsTab } from './adl-clients';
 import { AdlGroupedList } from './adl-groups';
 import { AdlHeader } from './adl-header';
@@ -296,19 +297,23 @@ export function ActiveDownloadsPage() {
 
   const showClients = state.filter === 'clients';
   // fork: search narrows the Downloads view only; review and clients keep their own lists.
-  const searching = search.trim() !== '';
+  // the box shows every keystroke at once; the filtering follows on a deferred value
+  const deferredSearch = useDeferredValue(search);
+  const searching = deferredSearch.trim() !== '';
   const found = useMemo(
     () =>
-      filterDownloads(search, {
+      filterDownloads(deferredSearch, {
         rows: visible,
         allRows: state.downloads,
         batches: downloads.visibleBatches,
         history: state.batchHistory,
       }),
-    [search, visible, state.downloads, downloads.visibleBatches, state.batchHistory],
+    [deferredSearch, visible, state.downloads, downloads.visibleBatches, state.batchHistory],
   );
   const showSearch = !reviewing && !showClients;
   const nothingFound = searching && found.batches.length === 0 && found.rows.length === 0;
+  // fork: the review list is drawn a window at a time
+  const reviewWindow = useProgressive(visible, state.filter, 80);
   const visibleUnverifiedIds = useMemo(
     () =>
       reviewing
@@ -471,7 +476,7 @@ export function ActiveDownloadsPage() {
                   {ADL_EMPTY_TEXT}
                 </div>
               ) : (
-                visible.map((dl) => {
+                reviewWindow.shown.map((dl) => {
                   const historyId = verificationHistoryId(dl);
                   return (
                     <AdlUnverifiedRow
@@ -486,6 +491,11 @@ export function ActiveDownloadsPage() {
                   );
                 })
               )}
+              <ProgressiveMore
+                remaining={reviewWindow.remaining}
+                onMore={reviewWindow.more}
+                noun="more"
+              />
             </div>
           ) : nothingFound ? (
             <div className="adl-list" id="adl-list">

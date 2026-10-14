@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useProfile, useReactPageShell } from '@/platform/shell/route-controllers';
 import { clearAudiobookWishlist } from '@/routes/audiobooks/-audiobooks.api';
@@ -42,6 +42,7 @@ import {
   trackCountLabel,
 } from '../-wishlist.helpers';
 import { useLiveWishlist } from '../-wishlist.live';
+import { ProgressiveMore, useProgressive } from '../../../platform/progressive.fork'; // fork
 import { Route } from '../route';
 import { WishlistAudiobooks } from './wishlist-audiobooks';
 import { WishlistList } from './wishlist-list';
@@ -149,12 +150,40 @@ export function WishlistPage() {
     () => (albumGroups ? forkGroupImages(albumGroups) : artistImages),
     [albumGroups, artistImages],
   );
+  // fork: the filter box keeps its own text and reaches the URL (and the
+  // filtering) a moment after typing stops; the filtering itself runs on a
+  // deferred value so a keystroke never waits for thousands of rows.
+  const [qInput, setQInput] = useState(search.q ?? '');
+  const pushedQ = useRef(search.q ?? '');
+  const qTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // changed from elsewhere (cleared, a link): follow it
+    if ((search.q ?? '') !== pushedQ.current) {
+      pushedQ.current = search.q ?? '';
+      setQInput(search.q ?? '');
+    }
+  }, [search.q]);
+  useEffect(
+    () => () => {
+      if (qTimer.current) clearTimeout(qTimer.current);
+    },
+    [],
+  );
+  const onFilterInput = (value: string) => {
+    setQInput(value);
+    if (qTimer.current) clearTimeout(qTimer.current);
+    qTimer.current = setTimeout(() => {
+      pushedQ.current = value;
+      void navigate({ search: (prev) => ({ ...prev, q: value }), replace: true });
+    }, 250);
+  };
+  const filterQ = useDeferredValue(search.q);
   const visibleGroups = useMemo(
     () =>
       albumGroups
-        ? forkFilterAlbumGroups(albumGroups, search.q, search.failing)
-        : filterWishlistGroups(groups, search.q, search.failing),
-    [albumGroups, groups, search.q, search.failing],
+        ? forkFilterAlbumGroups(albumGroups, filterQ, search.failing)
+        : filterWishlistGroups(groups, filterQ, search.failing),
+    [albumGroups, groups, filterQ, search.failing],
   );
 
   const nebulaGroups = useMemo(() => {
@@ -168,6 +197,9 @@ export function WishlistPage() {
     // 'busiest' is the helper's native order.
     return list;
   }, [visibleGroups, nebulaSort]);
+
+  // fork: the nebula draws a window of the orbs, more on demand
+  const orbWindow = useProgressive(nebulaGroups, `${nebulaSort}|${filterQ}|${groupBy}`, 48);
 
   const failingIds = useMemo(
     () =>
@@ -579,13 +611,8 @@ export function WishlistPage() {
                     type="text"
                     placeholder="Filter wishlist…"
                     aria-label="Filter wishlist"
-                    value={search.q}
-                    onChange={(event) =>
-                      void navigate({
-                        search: (prev) => ({ ...prev, q: event.target.value }),
-                        replace: true,
-                      })
-                    }
+                    value={qInput}
+                    onChange={(event) => onFilterInput(event.target.value)}
                   />
                 </div>
                 <button
@@ -711,7 +738,7 @@ export function WishlistPage() {
                         Nothing matches — clear the filter to see the whole hunt.
                       </div>
                     ) : (
-                      nebulaGroups.map((group, index) => (
+                      orbWindow.shown.map((group, index) => (
                         <WishlistOrb
                           key={group.name}
                           group={group}
@@ -734,6 +761,11 @@ export function WishlistPage() {
                         />
                       ))
                     )}
+                    <ProgressiveMore
+                      remaining={orbWindow.remaining}
+                      onMore={orbWindow.more}
+                      noun="more"
+                    />
                   </div>
                 </div>
               )}

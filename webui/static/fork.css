@@ -915,3 +915,17 @@ select.fork-album-input option { background: #181818; }
         overflow-wrap: anywhere;
     }
 }
+
+/* long lists: the "Show more" row */
+.fork-progressive-more {
+    display: block;
+    width: 100%;
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.75);
+    cursor: pointer;
+}
+.fork-progressive-more:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
