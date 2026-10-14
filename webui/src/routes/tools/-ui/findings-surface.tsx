@@ -781,24 +781,23 @@ export function FindingsSurface({
           try {
             // Clear DELETES the rows, so the next scan can raise them again —
             // which is what "just clear" has always meant here. Dismiss would
-            // suppress them permanently, a different promise entirely. Only
-            // safe when the type comes from a single job, which is the real
-            // case; otherwise fall back to the honest permanent dismiss.
-            const jobIds = group.job_ids || [];
-            const result =
-              jobIds.length === 1
-                ? await clearFindings({
-                    jobId: jobIds[0],
-                    status: 'pending',
-                    // Scope to THIS type. Without it a job that emits several
-                    // finding types would lose all of its pending rows when
-                    // you cleared one group (the #1142 family).
-                    findingType: group.finding_type,
-                  })
-                : {
-                    success: true,
-                    deleted: (await dismissFindingType(group.finding_type)).updated,
-                  };
+            // suppress them permanently, a different promise entirely. A type
+            // raised by several jobs is cleared job by job (fork: it used to
+            // fall back to a permanent dismiss).
+            const jobIds = group.job_ids?.length ? group.job_ids : [undefined];
+            let deleted = 0;
+            for (const jobId of jobIds) {
+              const part = await clearFindings({
+                jobId,
+                status: 'pending',
+                // Scope to THIS type. Without it a job that emits several
+                // finding types would lose all of its pending rows when
+                // you cleared one group (the #1142 family).
+                findingType: group.finding_type,
+              });
+              deleted += part.deleted || 0;
+            }
+            const result = { success: true, deleted };
             toast(
               result.success
                 ? `Cleared ${(result.deleted || 0).toLocaleString()} findings`

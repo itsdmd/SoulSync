@@ -6472,3 +6472,22 @@ def _fork_fix_handlers(self):
 
 
 RepairWorker._fix_handlers = _fork_fix_handlers
+
+
+# fork (itsdmd/SoulSync): the duplicate-track card also shows each copy's size
+# and format. See FORK.md (34).
+_upstream_get_findings = RepairWorker.get_findings
+
+
+def _fork_get_findings(self, *args, **kwargs):
+    page = _upstream_get_findings(self, *args, **kwargs)
+    try:
+        from core.fork import dup_info
+        dup_info.enrich(self, page)
+    except Exception:  # noqa: BLE001 - the list never depends on the extra figures
+        logger.debug("duplicate copy details not added", exc_info=True)
+    return page
+
+
+RepairWorker.get_findings = _fork_get_findings
+

@@ -45,6 +45,7 @@ import {
 // panel used to print it raw with an "s" suffix, so a 3:58 song read
 // "238000s" (#1210).
 import { formatDurationMs } from '../../artist-detail/-artist-detail.enhanced';
+import { DuplicateCopyExtras } from './duplicate-copy.fork';
 
 type Details = Record<string, unknown>;
 
@@ -605,6 +606,9 @@ export function FindingDetail({ finding, onKeepDuplicate, onApplyCoverArt }: Fin
         duration?: number;
         track_number?: number;
         playlists?: string[];
+        file_size?: number;
+        format?: string;
+        file_found?: boolean;
       }>(d.tracks);
       if (!tracks.length) {
         return <DetailGrid rows={[['Count', text(d.count) || '?']]} />;
@@ -646,6 +650,10 @@ export function FindingDetail({ finding, onKeepDuplicate, onApplyCoverArt }: Fin
                       {track.track_number ? ` · Track #${track.track_number}` : ''}
                     </span>
                     {track.file_path ? <span className="mono">{track.file_path}</span> : null}
+                    <DuplicateCopyExtras
+                      track={track}
+                      onKeep={() => onKeepDuplicate(finding.id, String(trackId))}
+                    />
                     {track.playlists?.length ? (
                       <span className="repair-in-playlist">
                         In playlist: {track.playlists.join(', ')}
