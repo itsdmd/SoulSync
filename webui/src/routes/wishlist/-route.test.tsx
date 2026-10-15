@@ -24,6 +24,29 @@ function albumRow(artist: string, album: string, name: string, retry = 0) {
   };
 }
 
+// fork: the page asks for artists a page at a time (FORK.md 37)
+function pageBody(
+  albums: unknown[],
+  singles: unknown[],
+  artistImages: Record<string, string> = {},
+) {
+  const failing = [...albums, ...singles].filter(
+    (r) => Number((r as { retry_count?: number }).retry_count) >= 3,
+  );
+  return {
+    success: true,
+    offset: 0,
+    artists: [],
+    matched_artists: 0,
+    has_more: false,
+    albums,
+    singles,
+    artist_images: artistImages,
+    failing_total: failing.length,
+    ids: failing.map((r) => (r as { spotify_track_id: string }).spotify_track_id),
+  };
+}
+
 function stubFetch(
   opts: { total?: number; albums?: unknown[]; singles?: unknown[]; processing?: boolean } = {},
 ) {
@@ -48,6 +71,10 @@ function stubFetch(
       // The live poller hits this on mount; stub it so nothing silently 404s.
       if (url.includes('/api/active-processes')) return res({ active_processes: [] });
       if (url.includes('/api/wishlist/cycle')) return res({ cycle: 'albums' });
+      if (url.includes('/api/fork/wishlist/page'))
+        return res(pageBody(albums, singles, { 'aphex twin': 'library.jpg' }));
+      if (url.includes('/api/fork/wishlist/failing-ids'))
+        return res({ ids: pageBody(albums, singles).ids });
       if (url.includes('category=albums'))
         return res({ tracks: albums, artist_images: { 'Aphex Twin': 'library.jpg' } });
       if (url.includes('category=singles')) return res({ tracks: singles, artist_images: {} });
@@ -344,6 +371,7 @@ describe('wishlist route', () => {
         if (url.includes('/api/wishlist/stats'))
           return res({ total: 1, albums: 1, singles: 0, next_run_in_seconds: 600 });
         if (url.includes('/api/wishlist/cycle')) return res({ cycle: 'albums' });
+        if (url.includes('/api/fork/wishlist/page')) return res(pageBody(albums, []));
         if (url.includes('category=albums')) return res({ tracks: albums, artist_images: {} });
         if (url.includes('category=singles')) return res({ tracks: [], artist_images: {} });
         if (url.includes('/api/active-processes')) return res({ active_processes: [] });
@@ -354,15 +382,55 @@ describe('wishlist route', () => {
     renderRoute();
 
     await waitFor(() => expect(document.querySelector('.wl-orb-group')).toBeTruthy());
-    const before = calls.filter((u) => u.includes('category=albums')).length;
+    const before = calls.filter((u) => u.includes('/api/fork/wishlist/page')).length;
 
     act(() => {
       window.dispatchEvent(new CustomEvent('ss:wishlist-changed'));
     });
 
     await waitFor(() => {
-      expect(calls.filter((u) => u.includes('category=albums')).length).toBeGreaterThan(before);
+      expect(calls.filter((u) => u.includes('/api/fork/wishlist/page')).length).toBeGreaterThan(
+        before,
+      );
     });
+  });
+
+  it('loads the next window of artists from the server on "Show more" (fork)', async () => {
+    const offsets: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (i: RequestInfo | URL) => {
+        const url = i instanceof Request ? i.url : String(i);
+        if (url.includes('/api/wishlist/stats'))
+          return res({ total: 2, albums: 2, singles: 0, next_run_in_seconds: 600 });
+        if (url.includes('/api/wishlist/cycle')) return res({ cycle: 'albums' });
+        if (url.includes('/api/fork/wishlist/page')) {
+          const offset = new URL(url).searchParams.get('offset') ?? '0';
+          offsets.push(offset);
+          const first = offset === '0';
+          return res({
+            ...pageBody(
+              [first ? albumRow('First Artist', 'A', 'x') : albumRow('Later Artist', 'B', 'y')],
+              [],
+            ),
+            offset: Number(offset),
+            artists: [first ? 'First Artist' : 'Later Artist'],
+            matched_artists: 2,
+            has_more: first,
+          });
+        }
+        if (url.includes('/api/active-processes')) return res({ active_processes: [] });
+        if (url.includes('/api/watchlist/artists')) return res({ success: true, artists: [] });
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    renderRoute();
+
+    const labels = () => [...document.querySelectorAll('.wl-orb-label')].map((n) => n.textContent);
+    await waitFor(() => expect(labels()).toEqual(['First Artist']));
+    fireEvent.click(await screen.findByTestId('progressive-more'));
+    await waitFor(() => expect(labels()).toEqual(['First Artist', 'Later Artist']));
+    expect(offsets).toEqual(['0', '48']);
   });
 
   it('keeps the audiobook tab on its original presentation', async () => {

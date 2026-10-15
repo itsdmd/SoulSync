@@ -1,6 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useProfile, useReactPageShell } from '@/platform/shell/route-controllers';
 import { clearAudiobookWishlist } from '@/routes/audiobooks/-audiobooks.api';
@@ -22,9 +28,9 @@ import {
   wishlistCycleQueryOptions,
   wishlistRetryProfileQueryOptions,
   wishlistStatsQueryOptions,
-  wishlistTracksQueryOptions,
 } from '../-wishlist.api';
 import {
+  forkFailingTrackIds,
   forkFilterAlbumGroups,
   forkGroupByAlbum,
   forkGroupImages,
@@ -32,6 +38,7 @@ import {
   forkLoadGroupBy,
   forkRemoveWishlistTracks,
   forkSaveGroupBy,
+  forkWishlistPageQueryOptions,
   type WishlistGroupBy,
 } from '../-wishlist.fork'; // fork
 import {
@@ -111,8 +118,6 @@ export function WishlistPage() {
   const statsQuery = useQuery(wishlistStatsQueryOptions(profileId));
   const cycleQuery = useQuery(wishlistCycleQueryOptions(profileId));
   const retryProfileQuery = useQuery(wishlistRetryProfileQueryOptions(profileId));
-  const albumsQuery = useQuery(wishlistTracksQueryOptions(profileId, 'albums'));
-  const singlesQuery = useQuery(wishlistTracksQueryOptions(profileId, 'singles'));
   const photosQuery = useQuery(wishlistArtistPhotosQueryOptions(profileId));
 
   const total = statsQuery.data?.total ?? 0;
@@ -120,36 +125,6 @@ export function WishlistPage() {
   const singleCount = statsQuery.data?.singles ?? 0;
   const currentCycle = cycleQuery.data?.cycle || 'albums';
 
-  const artistImages = useMemo(
-    () =>
-      buildArtistImageMap(
-        [albumsQuery.data ?? {}, singlesQuery.data ?? {}],
-        photosQuery.data ?? [],
-      ),
-    [albumsQuery.data, singlesQuery.data, photosQuery.data],
-  );
-
-  const groups = useMemo(() => {
-    const parse = (rows: unknown[] | undefined, type: 'album' | 'single') =>
-      (rows ?? [])
-        .map((row) => parseWishlistTrack(row as never, type))
-        .filter((t): t is ParsedWishlistTrack => t !== null);
-
-    return groupWishlistArtists(
-      parse(albumsQuery.data?.tracks, 'album'),
-      parse(singlesQuery.data?.tracks, 'single'),
-    );
-  }, [albumsQuery.data?.tracks, singlesQuery.data?.tracks]);
-
-  // fork: album groups have the artist-group shape, so both views take them as they are.
-  const albumGroups = useMemo(
-    () => (groupBy === 'album' ? forkGroupByAlbum(groups) : null),
-    [groups, groupBy],
-  );
-  const groupImages = useMemo(
-    () => (albumGroups ? forkGroupImages(albumGroups) : artistImages),
-    [albumGroups, artistImages],
-  );
   // fork: the filter box keeps its own text and reaches the URL (and the
   // filtering) a moment after typing stops; the filtering itself runs on a
   // deferred value so a keystroke never waits for thousands of rows.
@@ -178,6 +153,51 @@ export function WishlistPage() {
     }, 250);
   };
   const filterQ = useDeferredValue(search.q);
+  // fork: the page asks the server for a window of artists at a time (filter and
+  // order are the server's), and grows it as the list is scrolled.
+  const serverSort = view === 'list' ? 'failing' : nebulaSort;
+  const pagedQuery = useInfiniteQuery({
+    ...forkWishlistPageQueryOptions(profileId, filterQ, search.failing, serverSort),
+    placeholderData: keepPreviousData,
+  });
+  const pages = pagedQuery.data?.pages;
+  const albumRows = useMemo(() => (pages ?? []).flatMap((p) => p.albums), [pages]);
+  const singleRows = useMemo(() => (pages ?? []).flatMap((p) => p.singles), [pages]);
+  const loadedArtists = useMemo(
+    () => (pages ?? []).reduce((sum, p) => sum + p.artists.length, 0),
+    [pages],
+  );
+  const matchedArtists = pages?.[0]?.matched_artists ?? 0;
+  const serverRemaining = pagedQuery.hasNextPage ? Math.max(0, matchedArtists - loadedArtists) : 0;
+  const fetchMore = useCallback(() => {
+    if (pagedQuery.hasNextPage && !pagedQuery.isFetchingNextPage) {
+      void pagedQuery.fetchNextPage();
+    }
+  }, [pagedQuery]);
+
+  const artistImages = useMemo(
+    () => buildArtistImageMap(pages ?? [], photosQuery.data ?? []),
+    [pages, photosQuery.data],
+  );
+
+  const groups = useMemo(() => {
+    const parse = (rows: unknown[] | undefined, type: 'album' | 'single') =>
+      (rows ?? [])
+        .map((row) => parseWishlistTrack(row as never, type))
+        .filter((t): t is ParsedWishlistTrack => t !== null);
+
+    return groupWishlistArtists(parse(albumRows, 'album'), parse(singleRows, 'single'));
+  }, [albumRows, singleRows]);
+
+  // fork: album groups have the artist-group shape, so both views take them as they are.
+  const albumGroups = useMemo(
+    () => (groupBy === 'album' ? forkGroupByAlbum(groups) : null),
+    [groups, groupBy],
+  );
+  const groupImages = useMemo(
+    () => (albumGroups ? forkGroupImages(albumGroups) : artistImages),
+    [albumGroups, artistImages],
+  );
   const visibleGroups = useMemo(
     () =>
       albumGroups
@@ -201,15 +221,7 @@ export function WishlistPage() {
   // fork: the nebula draws a window of the orbs, more on demand
   const orbWindow = useProgressive(nebulaGroups, `${nebulaSort}|${filterQ}|${groupBy}`, 48);
 
-  const failingIds = useMemo(
-    () =>
-      groups
-        .flatMap((group) => [...group.albums.flatMap((album) => album.tracks), ...group.singles])
-        .filter((track) => track.failing)
-        .map((track) => track.id),
-    [groups],
-  );
-  const failingTotal = failingIds.length;
+  const failingTotal = pages?.[0]?.failing_total ?? 0;
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: WISHLIST_QUERY_KEY });
 
@@ -330,8 +342,17 @@ export function WishlistPage() {
   };
 
   /** New: clear the retry backoff on every stuck track at once. */
-  const onRetryAllFailing = () => {
-    if (failingIds.length > 0) bulkAction.mutate({ action: 'retry', ids: failingIds });
+  const onRetryAllFailing = async () => {
+    // fork: the failing tracks of the whole wishlist, not only the loaded artists
+    try {
+      const ids = await forkFailingTrackIds();
+      if (ids.length > 0) bulkAction.mutate({ action: 'retry', ids });
+    } catch (error) {
+      window.showToast?.(
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      );
+    }
   };
 
   /** New: drop a whole artist from the wishlist with a single confirm.
@@ -570,7 +591,7 @@ export function WishlistPage() {
                   type="button"
                   className="wlp-btn wlp-btn--sm wlp-btn--primary"
                   disabled={bulkAction.isPending}
-                  onClick={onRetryAllFailing}
+                  onClick={() => void onRetryAllFailing()}
                 >
                   <span aria-hidden="true">↻ </span>Retry all now
                 </button>
@@ -729,6 +750,7 @@ export function WishlistPage() {
                   onBulkAction={(action, ids) => bulkAction.mutateAsync({ action, ids })}
                   bulkBusy={bulkAction.isPending || removeSelected.isPending}
                   onRemoveSelected={(ids) => void confirmRemoveSelected(ids)}
+                  serverMore={{ remaining: serverRemaining, onMore: fetchMore }} // fork
                 />
               ) : (
                 <div className="wl-nebula">
@@ -762,8 +784,8 @@ export function WishlistPage() {
                       ))
                     )}
                     <ProgressiveMore
-                      remaining={orbWindow.remaining}
-                      onMore={orbWindow.more}
+                      remaining={orbWindow.remaining + serverRemaining}
+                      onMore={orbWindow.remaining > 0 ? orbWindow.more : fetchMore}
                       noun="more"
                     />
                   </div>

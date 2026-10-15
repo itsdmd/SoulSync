@@ -134,3 +134,57 @@ export async function forkRemoveWishlistTracks(trackIds: string[]): Promise<numb
   if (payload.success === false) throw new Error(payload.error || 'Failed');
   return payload.removed ?? 0;
 }
+
+// ── paged loading (FORK.md 37) ────────────────────────────────────────────
+// A wishlist of tens of thousands of tracks cannot be sent to the page whole.
+// The server returns a window of artists (filtered and ordered the way the page
+// shows them) with their tracks; the page grows it as you scroll.
+import { infiniteQueryOptions } from '@tanstack/react-query';
+
+import type { WishlistTrackRow } from './-wishlist.types';
+
+export const FORK_WISHLIST_PAGE = 48;
+
+export type ForkWishlistSort = 'busiest' | 'failing' | 'name';
+
+export interface ForkWishlistPage {
+  offset: number;
+  artists: string[];
+  matched_artists: number;
+  has_more: boolean;
+  albums: WishlistTrackRow[];
+  singles: WishlistTrackRow[];
+  artist_images?: Record<string, string>;
+  failing_total: number;
+}
+
+export function forkWishlistPageQueryOptions(
+  profileId: number,
+  q: string,
+  failing: boolean,
+  sort: ForkWishlistSort,
+) {
+  return infiniteQueryOptions({
+    queryKey: ['wishlist', 'page', profileId, q.trim(), failing, sort] as const,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      readJson<ForkWishlistPage>(
+        apiClient.get('fork/wishlist/page', {
+          searchParams: {
+            offset: pageParam,
+            limit: FORK_WISHLIST_PAGE,
+            q: q.trim(),
+            failing: failing ? '1' : '0',
+            sort,
+          },
+        }),
+      ),
+    getNextPageParam: (last) => (last.has_more ? last.offset + FORK_WISHLIST_PAGE : undefined),
+  });
+}
+
+/** Every failing track id of the wishlist (not only the loaded artists). */
+export async function forkFailingTrackIds(): Promise<string[]> {
+  const data = await readJson<{ ids?: string[] }>(apiClient.get('fork/wishlist/failing-ids'));
+  return data.ids ?? [];
+}

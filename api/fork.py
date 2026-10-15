@@ -750,3 +750,37 @@ def downloads_pause_set():
 
     result = download_pause.pause() if _body().get("paused") else download_pause.resume()
     return jsonify(success=True, **result)
+
+
+# ── wishlist: a window of artists at a time (FORK.md 37) ───────────────
+
+@bp.route("/api/fork/wishlist/page", methods=["GET"])
+def wishlist_page():
+    from api.wishlist_routes import _build_wishlist_route_runtime
+    from core.fork import wishlist_cache
+
+    try:
+        payload = wishlist_cache.page(
+            _build_wishlist_route_runtime(),
+            offset=_int_arg("offset", 0, 10_000_000),
+            limit=_int_arg("limit", 48, 200) or 48,
+            q=request.args.get("q", ""),
+            failing=request.args.get("failing") in ("1", "true"),
+            sort=request.args.get("sort", "busiest"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("wishlist page failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(payload), (500 if payload.get("error") else 200)
+
+
+@bp.route("/api/fork/wishlist/failing-ids", methods=["GET"])
+def wishlist_failing_ids():
+    from api.wishlist_routes import _build_wishlist_route_runtime
+    from core.fork import wishlist_cache
+
+    try:
+        return jsonify({"success": True, "ids": wishlist_cache.failing_track_ids(_build_wishlist_route_runtime())})
+    except Exception as exc:  # noqa: BLE001
+        logger.error("wishlist failing ids failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500

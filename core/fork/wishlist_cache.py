@@ -177,7 +177,13 @@ def stats(upstream, runtime):
     key = ("counts", profile)
     with _flight(key):
         fp = fingerprint(db, profile)
-        _local.counts = _get(key, fp)
+        held = _get(key, fp)
+        if held is None:
+            built = index_for(db, profile)
+            if built is not None:
+                held = dict(built.counts)
+                _put(key, fp, held)
+        _local.counts = held
         _local.store = (key, fp)
         try:
             return upstream(runtime)
@@ -222,3 +228,227 @@ def dedupe(upstream, db, profile_id=1):
     removed = upstream(db, profile_id=profile_id)
     _put(key, fingerprint(db, profile_id), True)
     return removed
+
+
+# ---- paged view: one request = a window of artists with their tracks ------------------
+#
+# The slim list above still ships every track. The wishlist page instead asks for
+# artists a page at a time: this index is built from one SQL pass over the table
+# (the JSON fields are read inside SQLite, no Python parsing or row formatting) and
+# held per fingerprint; a page is a slice of it.
+
+_FAILING_ATTEMPTS = 3          # webui WL_FAILING_ATTEMPTS: a track this deep in retries is "failing"
+
+_INDEX_SQL = """
+SELECT id, spotify_track_id, retry_count, last_attempted, failure_reason,
+       json_extract(spotify_data, '$.name'),
+       COALESCE(json_extract(spotify_data, '$.artists[0].name'),
+                CASE WHEN json_type(spotify_data, '$.artists[0]') = 'text'
+                     THEN json_extract(spotify_data, '$.artists[0]') END),
+       CASE json_type(spotify_data, '$.album')
+            WHEN 'object' THEN json_extract(spotify_data, '$.album.name')
+            WHEN 'text' THEN json_extract(spotify_data, '$.album') END,
+       CASE json_type(spotify_data, '$.album')
+            WHEN 'object' THEN json_extract(spotify_data, '$.album.album_type') END,
+       CASE json_type(spotify_data, '$.album')
+            WHEN 'object' THEN json_extract(spotify_data, '$.album.total_tracks') END,
+       CASE json_type(spotify_data, '$.album')
+            WHEN 'object' THEN json_extract(spotify_data, '$.album.images[0].url') END
+FROM wishlist_tracks
+WHERE profile_id = ? AND json_valid(spotify_data)
+ORDER BY date_added
+"""
+
+
+class _Artist:
+    __slots__ = ("name", "albums", "singles", "failing", "album_names", "key")
+
+    def __init__(self, name: str):
+        self.name = name
+        self.key = name.lower()
+        self.albums: list = []        # track tuples of the "albums" category
+        self.singles: list = []
+        self.failing = 0
+        self.album_names: set = set()
+
+    @property
+    def total(self) -> int:
+        return len(self.albums) + len(self.singles)
+
+
+class _Index:
+    def __init__(self):
+        self.artists: Dict[str, _Artist] = {}
+        self.counts = {"singles": 0, "albums": 0, "total": 0}
+        self.failing_ids: list = []
+        self._orders: Dict[str, list] = {}
+
+    def order(self, sort: str) -> list:
+        cached = self._orders.get(sort)
+        if cached is None:
+            artists = list(self.artists.values())          # first appearance order
+            if sort == "name":
+                artists.sort(key=lambda a: a.key)
+            elif sort == "failing":
+                artists.sort(key=lambda a: (-a.failing, -a.total, a.key))
+            else:
+                artists.sort(key=lambda a: -a.total)
+            cached = self._orders[sort] = artists
+        return cached
+
+
+def _category(album_type: Any, total_tracks: Any) -> str:
+    from core.wishlist.classification import _coerce_positive_int
+
+    kind = album_type.lower() if isinstance(album_type, str) else ""
+    if kind in ("single", "ep"):
+        return "singles"
+    if kind in ("album", "compilation"):
+        return "albums"
+    count = _coerce_positive_int(total_tracks)
+    if count is not None and count > 0:
+        return "singles" if count < 6 else "albums"
+    return "albums"
+
+
+def _build_index(db: Any, profile_id: Any) -> _Index:
+    index = _Index()
+    seen: set = set()
+    with db._get_connection() as conn:
+        rows = conn.execute(_INDEX_SQL, (profile_id,)).fetchall()
+    for (row_id, sid, retry, last, reason, title, artist, album, album_type, total, image) in rows:
+        track_id = sid or str(row_id)
+        if track_id in seen:
+            continue
+        seen.add(track_id)
+        name = artist if isinstance(artist, str) and artist else "Unknown Artist"
+        entry = index.artists.get(name)
+        if entry is None:
+            entry = index.artists[name] = _Artist(name)
+        category = _category(album_type, total)
+        try:
+            retries = int(retry or 0)
+        except (TypeError, ValueError):
+            retries = 0
+        item = (track_id, sid, retries, last, reason, title, album, album_type, image)
+        # every release name is searchable here (a single's too: the page groups by
+        # album as well); the page narrows the loaded groups again with its own rule
+        entry.album_names.add((album if isinstance(album, str) and album else "Unknown").lower())
+        if category == "singles":
+            entry.singles.append(item)
+        else:
+            entry.albums.append(item)
+        index.counts[category] += 1
+        if retries >= _FAILING_ATTEMPTS:
+            entry.failing += 1
+            index.failing_ids.append(track_id)
+    index.counts["total"] = index.counts["albums"] + index.counts["singles"]
+    return index
+
+
+def index_for(db: Any, profile_id: Any) -> Optional[_Index]:
+    """The artist index for the table as it is now; ``None`` when it cannot be built."""
+    key = ("index", profile_id)
+    fp = fingerprint(db, profile_id)
+    hit = _get(key, fp)
+    if hit is not None:
+        return hit
+    with _flight(key):
+        fp = fingerprint(db, profile_id)
+        hit = _get(key, fp)
+        if hit is not None:
+            return hit
+        try:
+            built = _build_index(db, profile_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("wishlist index not built: %s", exc)
+            return None
+        _put(key, fp, built)
+        return built
+
+
+def _row_for_page(item: tuple, artist: str) -> Dict[str, Any]:
+    track_id, sid, retries, last, reason, title, album, album_type, image = item
+    return {
+        "id": track_id,
+        "spotify_track_id": sid,
+        "retry_count": retries,
+        "last_attempted": last,
+        "failure_reason": reason,
+        "spotify_data": {
+            "name": title,
+            "artists": [{"name": artist}],
+            "album": {"name": album, "album_type": album_type,
+                      "images": [{"url": image}] if image else []},
+        },
+    }
+
+
+def page(runtime, *, offset: int = 0, limit: int = 48, q: str = "", failing: bool = False,
+         sort: str = "busiest") -> Dict[str, Any]:
+    """One window of artists (filtered and ordered like the page does) with their tracks."""
+    db = runtime.get_music_database()
+    profile = runtime.profile_id
+    if index_for(db, profile) is None:
+        return {"error": "wishlist index unavailable"}
+    # as the full track list always did: clear duplicate rows, unless a batch is working the list
+    try:
+        with runtime.tasks_lock:
+            busy = any(b.get("playlist_id") == "wishlist" and b.get("phase") in ("analysis", "downloading")
+                       for b in runtime.download_batches.values())
+        if not busy and db.remove_wishlist_duplicates(profile_id=profile):
+            _entries.pop(("index", profile), None)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("duplicate cleanup skipped: %s", exc)
+    index = index_for(db, profile)
+    if index is None:
+        return {"error": "wishlist index unavailable"}
+
+    needle = (q or "").lower().strip()
+    matched = index.order(sort if sort in ("busiest", "failing", "name") else "busiest")
+    if needle or failing:
+        def keep(artist: _Artist) -> bool:
+            if failing and artist.failing == 0:
+                return False
+            if not needle:
+                return True
+            return needle in artist.key or any(needle in name for name in artist.album_names)
+        matched = [a for a in matched if keep(a)]
+
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 200))
+    window = matched[offset:offset + limit]
+    albums: list = []
+    singles: list = []
+    for artist in window:
+        albums.extend(_row_for_page(i, artist.name) for i in artist.albums)
+        singles.extend(_row_for_page(i, artist.name) for i in artist.singles)
+
+    images: Dict[str, str] = {}
+    try:
+        from core.wishlist.routes import _enrich_wishlist_images
+
+        wrapped = [{"artist_name": row["spotify_data"]["artists"][0]["name"], "spotify_data": row["spotify_data"]}
+                   for row in albums + singles]
+        images = _enrich_wishlist_images(wrapped, db)
+    except Exception as exc:  # noqa: BLE001 - art is cosmetic
+        logger.debug("wishlist page art not resolved: %s", exc)
+
+    return {
+        "success": True,
+        "offset": offset,
+        "limit": limit,
+        "artists": [a.name for a in window],
+        "matched_artists": len(matched),
+        "has_more": offset + limit < len(matched),
+        "albums": albums,
+        "singles": singles,
+        "artist_images": images,
+        "counts": dict(index.counts),
+        "failing_total": len(index.failing_ids),
+    }
+
+
+def failing_track_ids(runtime) -> list:
+    index = index_for(runtime.get_music_database(), runtime.profile_id)
+    return list(index.failing_ids) if index else []

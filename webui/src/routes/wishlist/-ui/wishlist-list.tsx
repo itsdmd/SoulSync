@@ -210,7 +210,10 @@ export function WishlistList({
   onGrabArtist,
   onRemoveSelected, // fork
   onRemoveGroup, // fork
+  serverMore, // fork
 }: {
+  /** fork: artists still on the server, loaded as the list is scrolled. */
+  serverMore?: { remaining: number; onMore: () => void };
   /** fork: when present, each group row gets "Remove all" beside "Grab all". */
   onRemoveGroup?: (group: WishlistArtistGroup) => void;
   /** fork: when present, the selection bar gets a "Remove" button. */
@@ -515,8 +518,8 @@ export function WishlistList({
         </div>
       ))}
       <ProgressiveMore
-        remaining={artistWindow.remaining}
-        onMore={artistWindow.more}
+        remaining={artistWindow.remaining + (serverMore?.remaining ?? 0)}
+        onMore={artistWindow.remaining > 0 || !serverMore ? artistWindow.more : serverMore.onMore}
         noun="more artists"
       />
     </div>
