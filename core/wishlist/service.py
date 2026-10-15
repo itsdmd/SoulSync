@@ -503,3 +503,23 @@ def get_wishlist_service() -> WishlistService:
 
 
 __all__ = ["WishlistService", "get_wishlist_service"]
+
+
+# fork (itsdmd/SoulSync): the stats endpoint skips the full load when it already
+# holds the counts for an unchanged wishlist. See FORK.md (36).
+_upstream_get_wishlist_tracks_for_download = WishlistService.get_wishlist_tracks_for_download
+
+
+def _fork_get_wishlist_tracks_for_download(self, limit=None, profile_id=1, approved_only=False):
+    try:
+        from core.fork import hooks, wishlist_cache
+
+        if hooks._active() and wishlist_cache.skip_load():
+            return []
+    except Exception:  # noqa: BLE001 - the load itself never depends on the cache
+        __import__('logging').getLogger(__name__).debug('wishlist cache skipped', exc_info=True)
+    return _upstream_get_wishlist_tracks_for_download(
+        self, limit=limit, profile_id=profile_id, approved_only=approved_only)
+
+
+WishlistService.get_wishlist_tracks_for_download = _fork_get_wishlist_tracks_for_download

@@ -26144,3 +26144,20 @@ def _fork_check_album_exists_with_editions(self, title: str, artist: str, confid
 MusicDatabase.check_track_exists = _fork_check_track_exists
 MusicDatabase.check_album_exists = _fork_check_album_exists
 MusicDatabase.check_album_exists_with_editions = _fork_check_album_exists_with_editions
+
+
+# fork (itsdmd/SoulSync): skip the wishlist duplicate scan while the table is
+# unchanged since the last one. See FORK.md (36).
+_upstream_remove_wishlist_duplicates = MusicDatabase.remove_wishlist_duplicates
+
+
+def _fork_remove_wishlist_duplicates(self, profile_id: int = 1) -> int:
+    try:
+        from core.fork import wishlist_cache
+
+        return wishlist_cache.dedupe(_upstream_remove_wishlist_duplicates, self, profile_id)
+    except Exception:  # noqa: BLE001 - the scan itself never depends on the cache
+        return _upstream_remove_wishlist_duplicates(self, profile_id=profile_id)
+
+
+MusicDatabase.remove_wishlist_duplicates = _fork_remove_wishlist_duplicates

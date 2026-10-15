@@ -59,7 +59,8 @@ export function wishlistTracksQueryOptions(profileId: number, category: 'albums'
     queryKey: [...WISHLIST_QUERY_KEY, 'tracks', profileId, category] as const,
     queryFn: () =>
       readJson<WishlistTracksResponse>(
-        apiClient.get('wishlist/tracks', { searchParams: { category } }),
+        // slim: only the fields the page reads (fork, FORK.md 36)
+        apiClient.get('wishlist/tracks', { searchParams: { category, slim: '1' } }),
       ),
   });
 }

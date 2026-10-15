@@ -49,3 +49,19 @@ def build_wishlist_stats_payload(
 
 
 __all__ = ["count_wishlist_tracks_by_category", "build_wishlist_stats_payload"]
+
+
+# fork (itsdmd/SoulSync): reuse the counts while the wishlist is unchanged.
+# See FORK.md (36).
+_upstream_count_wishlist_tracks_by_category = count_wishlist_tracks_by_category
+
+
+def count_wishlist_tracks_by_category(raw_tracks):  # noqa: F811
+    try:
+        from core.fork import hooks, wishlist_cache
+
+        if hooks._active():
+            return wishlist_cache.counts(_upstream_count_wishlist_tracks_by_category, raw_tracks)
+    except Exception:  # noqa: BLE001
+        __import__('logging').getLogger(__name__).debug('wishlist cache skipped', exc_info=True)
+    return _upstream_count_wishlist_tracks_by_category(raw_tracks)

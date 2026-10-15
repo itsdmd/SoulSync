@@ -896,3 +896,25 @@ __all__ = [
     "BULK_WISHLIST_MAX_IDS",
     "bulk_wishlist_action",
 ]
+
+
+# fork (itsdmd/SoulSync): cached stats, a slim track list on request and a
+# skipped duplicate scan while nothing changed. See FORK.md (36).
+_upstream_get_wishlist_stats = get_wishlist_stats
+_upstream_get_wishlist_tracks = get_wishlist_tracks
+
+
+def get_wishlist_stats(runtime):  # noqa: F811
+    try:
+        from core.fork import wishlist_cache
+    except Exception:  # noqa: BLE001
+        return _upstream_get_wishlist_stats(runtime)
+    return wishlist_cache.stats(_upstream_get_wishlist_stats, runtime)
+
+
+def get_wishlist_tracks(runtime, *, category=None, limit=None):  # noqa: F811
+    try:
+        from core.fork import wishlist_cache
+    except Exception:  # noqa: BLE001
+        return _upstream_get_wishlist_tracks(runtime, category=category, limit=limit)
+    return wishlist_cache.tracks(_upstream_get_wishlist_tracks, runtime, category=category, limit=limit)
