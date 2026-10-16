@@ -752,6 +752,15 @@ def downloads_pause_set():
     return jsonify(success=True, **result)
 
 
+@bp.route("/api/fork/downloads/discard-all", methods=["POST"])
+@admin_only
+def downloads_discard_all():
+    """Stop and drop every unfinished batch without adding it to the wishlist."""
+    from core.fork import download_discard
+
+    return jsonify(success=True, **download_discard.discard_all())
+
+
 # ── wishlist: a window of artists at a time (FORK.md 37) ───────────────
 
 @bp.route("/api/fork/wishlist/page", methods=["GET"])

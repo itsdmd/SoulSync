@@ -73,6 +73,12 @@ def resume() -> Dict[str, Any]:
     return {**state(), "resumed_batches": started}
 
 
+def forget(batch_id: str) -> None:
+    """A discarded batch has nothing left to start on Resume All."""
+    with _lock:
+        _held.discard(batch_id)
+
+
 def reset() -> None:
     """For tests."""
     global _paused, _start

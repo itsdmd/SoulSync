@@ -130,6 +130,18 @@ export function AdlHeader({
               {pause.paused ? 'Resume All' : 'Pause All'}
             </button>
           ) : null}
+          {pause && (pause.paused || hasRunningWork) ? (
+            <button
+              type="button"
+              className="adl-cancel-all-btn adl-discard-all-btn"
+              id="adl-discard-all-btn"
+              title="Stop everything unfinished and remove it from the list, without adding it to the wishlist"
+              disabled={pause.discardPending}
+              onClick={pause.discardAll}
+            >
+              Discard All
+            </button>
+          ) : null}
           {hasRunningWork ? (
             <button
               type="button"

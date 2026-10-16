@@ -452,15 +452,24 @@ describe('AdlHeader', () => {
   // fork: Pause All / Resume All
   it('offers Pause All while work is running and Resume All while paused', () => {
     const toggle = vi.fn();
+    const discardAll = vi.fn();
+    const rest = { discardPending: false, discardAll };
     render(<AdlHeader {...props} />);
     expect(screen.queryByText('Pause All')).toBeNull();
+    expect(screen.queryByText('Discard All')).toBeNull();
 
     cleanup();
     render(
-      <AdlHeader {...props} hasRunningWork pause={{ paused: false, pending: false, toggle }} />,
+      <AdlHeader
+        {...props}
+        hasRunningWork
+        pause={{ paused: false, pending: false, toggle, ...rest }}
+      />,
     );
     fireEvent.click(screen.getByText('Pause All'));
     expect(toggle).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Discard All'));
+    expect(discardAll).toHaveBeenCalledTimes(1);
 
     cleanup();
     // paused with nothing running: the way back must still be there
@@ -468,7 +477,7 @@ describe('AdlHeader', () => {
       <AdlHeader
         {...props}
         hasRunningWork={false}
-        pause={{ paused: true, pending: false, toggle }}
+        pause={{ paused: true, pending: false, toggle, ...rest }}
       />,
     );
     expect(screen.getByText('Resume All')).toBeInTheDocument();
