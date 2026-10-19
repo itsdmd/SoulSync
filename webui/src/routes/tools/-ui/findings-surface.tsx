@@ -77,6 +77,7 @@ import {
   REPAIR_PAGE_SIZE_OPTIONS,
 } from '../-tools.core';
 import { FORK_FINDINGS_CHANGED, forkFindingEditor, forkFixLabel } from '../-tools.fork';
+import { forkClearGroup, forkQueueFix, useForkFixQueue } from '../-tools.fork-queue'; // fork
 import { safeFixablePending, visibleGroups } from '../-tools.groups';
 import { RedownloadModal } from '../../artist-detail/-ui/redownload-modal';
 import { ReidentifyModal } from '../../artist-detail/-ui/reidentify-modal';
@@ -85,6 +86,7 @@ import { FindingDetail } from './finding-detail';
 import { useFindingPrompts } from './finding-prompts';
 import { FindingsAlbumGrid } from './findings-album-grid';
 import { FindingsInbox } from './findings-inbox';
+import { ForkFixQueueBar } from './fork-fix-queue-bar'; // fork
 import { HealthHero } from './health-hero';
 
 function toast(message: string, type = 'info') {
@@ -122,7 +124,7 @@ const GROUP_MASS_DELETE_THRESHOLD = 50;
 const STATUS_SEGMENTS = [
   { value: 'pending', label: 'Open' },
   { value: 'resolved', label: 'Fixed' },
-  { value: 'dismissed', label: 'Dismissed' },
+  { value: 'dismissed', label: 'Ignored' },
   { value: '', label: 'All' },
 ] as const;
 
@@ -397,6 +399,11 @@ export function FindingsSurface({
 
   watchBulkFixRef.current = watchBulkFixRun;
 
+  // fork: the queue of Fix all runs; a job it starts gets the same progress bar
+  const forkQueue = useForkFixQueue(watchBulkFixRun);
+  const forkQueueRef = useRef(forkQueue);
+  forkQueueRef.current = forkQueue;
+
   useEffect(
     () => () => {
       if (bulkTimer.current) clearInterval(bulkTimer.current);
@@ -501,7 +508,7 @@ export function FindingsSurface({
         // Was a bare `return`: the row stayed put with no toast and no
         // refresh, so a failed dismiss was indistinguishable from a missed
         // click, and people clicked it again and again.
-        toast(`Could not dismiss finding: ${(error as Error).message}`, 'error');
+        toast(`Could not ignore finding: ${(error as Error).message}`, 'error');
         return;
       }
       refreshAll();
@@ -762,7 +769,7 @@ export function FindingsSurface({
    * an orphan and names the track to KEEP for a duplicate.
    */
   const fixGroup = useCallback(
-    async (group: FindingGroup, info: FindingTypeInfo | undefined) => {
+    async (group: FindingGroup, info: FindingTypeInfo | undefined, queueIt = false) => {
       const label = info?.label || group.finding_type.replace(/_/g, ' ');
       const count = group.pending;
       let fixAction: string | null = null;
@@ -822,7 +829,7 @@ export function FindingsSurface({
         if (!fixAction) return;
         if (fixAction === 'ignore') {
           const updated = (await dismissFindingType(group.finding_type)).updated || 0;
-          toast(`Dismissed ${updated.toLocaleString()} quality findings`, 'success');
+          toast(`Ignored ${updated.toLocaleString()} quality findings`, 'success');
           refreshAll();
           return;
         }
@@ -864,6 +871,25 @@ export function FindingsSurface({
         if (!confirmed) return;
       }
 
+      if (queueIt) {
+        // fork: same answers as Fix all, but the server runs it after the current job
+        try {
+          const queued = await forkQueueFix({
+            findingType: group.finding_type,
+            fixAction,
+            label,
+            count,
+          });
+          if (queued.added) toast(`${label} queued (position ${queued.position})`, 'info');
+          else if (queued.duplicate) toast(`${label} is already in the queue`, 'info');
+          else toast(queued.error || 'Could not queue', 'error');
+          void forkQueueRef.current?.reload();
+        } catch {
+          toast('Could not queue', 'error');
+        }
+        return;
+      }
+
       try {
         const result = await startBulkFix({
           findingType: group.finding_type,
@@ -885,13 +911,29 @@ export function FindingsSurface({
     [prompts, refreshAll, watchBulkFixRun],
   );
 
+  /** fork: clear a group's open findings without ignoring them. */
+  const clearGroup = useCallback(
+    async (group: FindingGroup, info: FindingTypeInfo | undefined) => {
+      const label = info?.label || group.finding_type.replace(/_/g, ' ');
+      try {
+        const deleted = await forkClearGroup(group, label);
+        if (deleted === null) return;
+        toast(`Cleared ${deleted.toLocaleString()} ${label.toLowerCase()} findings`, 'success');
+        refreshAll();
+      } catch {
+        toast('Error clearing findings', 'error');
+      }
+    },
+    [refreshAll],
+  );
+
   const dismissGroup = useCallback(
     async (group: FindingGroup, info: FindingTypeInfo | undefined) => {
       const label = info?.label || group.finding_type.replace(/_/g, ' ');
       const confirmed = await window.showConfirmDialog?.({
-        title: `Dismiss all ${label}`,
-        message: `Dismiss all ${group.pending.toLocaleString()} open ${label.toLowerCase()} findings? Dismissed findings are never raised again — you can bring one back from the Dismissed view.`,
-        confirmText: 'Dismiss all',
+        title: `Ignore all ${label}`,
+        message: `Ignore all ${group.pending.toLocaleString()} open ${label.toLowerCase()} findings? Ignored findings are never raised again — you can bring one back from the Ignored view.`,
+        confirmText: 'Ignore all',
         destructive: false,
       });
       if (!confirmed) return;
@@ -899,13 +941,13 @@ export function FindingsSurface({
         const result = await dismissFindingType(group.finding_type);
         toast(
           result.success
-            ? `Dismissed ${(result.updated || 0).toLocaleString()} findings`
-            : result.error || 'Failed to dismiss',
+            ? `Ignored ${(result.updated || 0).toLocaleString()} findings`
+            : result.error || 'Failed to ignore',
           result.success ? 'success' : 'error',
         );
         refreshAll();
       } catch {
-        toast('Error dismissing findings', 'error');
+        toast('Error ignoring findings', 'error');
       }
     },
     [refreshAll],
@@ -1119,7 +1161,7 @@ export function FindingsSurface({
                 type="button"
                 onClick={() => void bulkDismiss()}
               >
-                Dismiss Selected
+                Ignore Selected
               </button>
             </div>
           ) : null}
@@ -1271,6 +1313,7 @@ export function FindingsSurface({
       />
 
       {bulkRunBar}
+      <ForkFixQueueBar queue={forkQueue} />
 
       {cacheHealth && (cacheHealth.total_entities || cacheHealth.total_searches) ? (
         <div className="repair-cache-health">
@@ -1453,6 +1496,8 @@ export function FindingsSurface({
           onToggleOpen={toggleOpenGroup}
           onFixGroup={(group, info) => void fixGroup(group, info)}
           onDismissGroup={(group, info) => void dismissGroup(group, info)}
+          onQueueGroup={(group, info) => void fixGroup(group, info, true)} // fork
+          onClearGroup={(group, info) => void clearGroup(group, info)} // fork
           busy={Boolean(bulkRun?.running)}
         >
           {findingList}
@@ -1682,7 +1727,7 @@ function FindingCard({
               <button
                 className="repair-finding-btn dismiss"
                 type="button"
-                title="Dismiss — never show this finding again"
+                title="Ignore — never show this finding again"
                 onClick={() => void onDismiss(finding.id)}
               >
                 &times;

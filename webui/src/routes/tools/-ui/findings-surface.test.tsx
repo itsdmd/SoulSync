@@ -289,7 +289,7 @@ describe('the status segmented control', () => {
     const segments = [...document.querySelectorAll('.repair-status-seg')].map(
       (node) => node.textContent,
     );
-    expect(segments).toEqual(['Open0', 'Fixed5', 'Dismissed2', 'All7']);
+    expect(segments).toEqual(['Open0', 'Fixed5', 'Ignored2', 'All7']);
   });
 
   it('grows an Auto-fixed segment only once the worker has fixed something', async () => {
@@ -302,7 +302,7 @@ describe('the status segmented control', () => {
     const segments = [...document.querySelectorAll('.repair-status-seg')].map(
       (node) => node.textContent,
     );
-    expect(segments).toEqual(['Open1', 'Fixed0', 'Dismissed0', 'Auto-fixed9', 'All10']);
+    expect(segments).toEqual(['Open1', 'Fixed0', 'Ignored0', 'Auto-fixed9', 'All10']);
   });
 
   it('never changes the filter by itself', async () => {
@@ -320,7 +320,7 @@ describe('the status segmented control', () => {
     routes({ [COUNTS]: { dismissed: 9 }, [FINDINGS]: page([]) });
     await renderList();
 
-    fireEvent.click(screen.getByText('Dismissed').closest('button') as HTMLElement);
+    fireEvent.click(screen.getByText('Ignored').closest('button') as HTMLElement);
     await flush();
     const url = fetchMock.mock.calls
       .map((call) => String(call[0]))
@@ -432,7 +432,10 @@ describe('the findings inbox', () => {
     await flush();
 
     expect(document.querySelector('.repair-inbox-blurb')?.textContent).toContain('upscaled');
-    expect(document.querySelector('.repair-inbox-btn')?.textContent).toBe('Dismiss all');
+    const labels = [...document.querySelectorAll('.repair-inbox-btn')].map((b) => b.textContent);
+    expect(labels).toContain('Ignore all');
+    expect(labels).toContain('Clear'); // fork: delete without ignoring
+    expect(labels).not.toContain('Add to queue'); // nothing to fix, nothing to queue
   });
 
   it('opens exactly one group at a time and scopes the list to its type', async () => {
@@ -595,7 +598,7 @@ describe('the findings inbox', () => {
     renderSurface();
     await flush();
 
-    fireEvent.click(screen.getByText('Dismiss all'));
+    fireEvent.click(screen.getByText('Ignore all'));
     await flush();
     expect(confirmSpy).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('never raised again') }),
@@ -1188,7 +1191,7 @@ describe('bulk selection', () => {
 
     fireEvent.click(document.getElementById('repair-select-all-cb') as HTMLElement);
     await flush();
-    fireEvent.click(screen.getByText('Dismiss Selected'));
+    fireEvent.click(screen.getByText('Ignore Selected'));
     await flush();
 
     expect(bodyOf('/findings/bulk')).toEqual({

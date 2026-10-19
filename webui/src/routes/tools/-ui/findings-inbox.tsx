@@ -29,6 +29,10 @@ export interface FindingsInboxProps {
   onToggleOpen: (findingType: string) => void;
   onFixGroup: (group: FindingGroup, info: FindingTypeInfo | undefined) => void;
   onDismissGroup: (group: FindingGroup, info: FindingTypeInfo | undefined) => void;
+  /** fork: run this group's fix after the current job (the button is absent without it). */
+  onQueueGroup?: (group: FindingGroup, info: FindingTypeInfo | undefined) => void;
+  /** fork: delete this group's open findings without ignoring them. */
+  onClearGroup?: (group: FindingGroup, info: FindingTypeInfo | undefined) => void;
   /** True while a background bulk run owns the fix buttons. */
   busy: boolean;
   /** The scoped finding list, rendered inside whichever group is open. */
@@ -43,6 +47,8 @@ export function FindingsInbox({
   onToggleOpen,
   onFixGroup,
   onDismissGroup,
+  onQueueGroup, // fork
+  onClearGroup, // fork
   busy,
   children,
 }: FindingsInboxProps) {
@@ -133,15 +139,36 @@ export function FindingsInbox({
                     {` all (${group.pending.toLocaleString()})`}
                   </button>
                 ) : null}
+                {canFix && onQueueGroup ? (
+                  <button
+                    type="button"
+                    className="repair-inbox-btn ghost"
+                    title="Run this fix after the current job finishes"
+                    onClick={() => onQueueGroup(group, info)}
+                  >
+                    Add to queue
+                  </button>
+                ) : null}
+                {group.pending > 0 && onClearGroup ? (
+                  <button
+                    type="button"
+                    className="repair-inbox-btn ghost"
+                    disabled={busy}
+                    title="Delete these findings without ignoring them — the next scan raises them again"
+                    onClick={() => onClearGroup(group, info)}
+                  >
+                    Clear
+                  </button>
+                ) : null}
                 {group.pending > 0 ? (
                   <button
                     type="button"
                     className="repair-inbox-btn ghost"
                     disabled={busy}
-                    title="Dismiss this whole group — never show these again"
+                    title="Ignore this whole group — never show these again"
                     onClick={() => onDismissGroup(group, info)}
                   >
-                    Dismiss all
+                    Ignore all
                   </button>
                 ) : null}
                 <button

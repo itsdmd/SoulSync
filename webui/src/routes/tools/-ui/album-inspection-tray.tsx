@@ -180,7 +180,7 @@ export function AlbumInspectionTray({
     setBusyIds(new Set());
     await loadAlbumFindings();
     onRefresh();
-    window.showToast?.(`Dismissed issues on "${albumName}"`, 'info');
+    window.showToast?.(`Ignored issues on "${albumName}"`, 'info');
   };
 
   const handleReopenAllOnAlbum = async () => {
@@ -268,9 +268,9 @@ export function AlbumInspectionTray({
                 type="button"
                 className="btn btn--sm btn--secondary album-tray-btn"
                 onClick={() => void handleDismissAllOnAlbum()}
-                title="Dismiss all issues on this album"
+                title="Ignore all issues on this album"
               >
-                Dismiss All
+                Ignore All
               </button>
             </>
           ) : status === 'resolved' ? (
@@ -299,7 +299,7 @@ export function AlbumInspectionTray({
             </>
           ) : status === 'dismissed' ? (
             <>
-              <span className="album-tray-status-tag dismissed">Dismissed</span>
+              <span className="album-tray-status-tag dismissed">Ignored</span>
               <button
                 type="button"
                 className="btn btn--sm btn--secondary album-tray-btn"
@@ -490,9 +490,9 @@ export function AlbumInspectionTray({
                             className="btn btn--xs btn--secondary album-action-btn dismiss"
                             disabled={busy}
                             onClick={() => void handleDismissOne(f.id)}
-                            title="Dismiss issue"
+                            title="Ignore issue"
                           >
-                            Dismiss
+                            Ignore
                           </button>
                         </>
                       ) : f.status === 'resolved' ? (

@@ -761,6 +761,40 @@ def downloads_discard_all():
     return jsonify(success=True, **download_discard.discard_all())
 
 
+# ── Tools page: queue of Fix All runs ───────────────────────────────────
+
+@bp.route("/api/fork/findings/queue", methods=["GET"])
+def findings_queue_state():
+    from core.fork import fix_queue
+
+    return jsonify(success=True, **fix_queue.state())
+
+
+@bp.route("/api/fork/findings/queue", methods=["POST"])
+@admin_only
+def findings_queue_add():
+    """``{"finding_type", "fix_action"?, "label"?, "count"?}``: run it after the current job."""
+    from core.fork import fix_queue
+
+    body = _body()
+    result = fix_queue.add(str(body.get("finding_type") or ""), body.get("fix_action"),
+                           str(body.get("label") or ""), body.get("count") or 0)
+    if result.get("error"):
+        return jsonify(success=False, **result), 400
+    return jsonify(success=True, **result)
+
+
+@bp.route("/api/fork/findings/queue/remove", methods=["POST"])
+@admin_only
+def findings_queue_remove():
+    """``{"id": n}`` drops one entry; no id empties the queue."""
+    from core.fork import fix_queue
+
+    item_id = _body().get("id")
+    removed = fix_queue.remove(int(item_id) if item_id is not None else None)
+    return jsonify(success=True, removed=removed)
+
+
 # ── wishlist: a window of artists at a time (FORK.md 37) ───────────────
 
 @bp.route("/api/fork/wishlist/page", methods=["GET"])

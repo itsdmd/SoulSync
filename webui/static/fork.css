@@ -929,3 +929,13 @@ select.fork-album-input option { background: #181818; }
     cursor: pointer;
 }
 .fork-progressive-more:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+
+/* Tools → findings: the queue of Fix all runs (FORK.md 39) */
+.fork-fix-queue { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fork-fix-queue-item {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border-radius: 999px; background: rgba(255, 255, 255, 0.08); font-size: 0.85em;
+}
+.fork-fix-queue-x { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 2px; opacity: 0.7; }
+.fork-fix-queue-x:hover { opacity: 1; }
+.fork-fix-queue-problem { color: #e8a33d; font-size: 0.85em; }
