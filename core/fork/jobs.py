@@ -654,7 +654,13 @@ def fix_handlers(worker: Any) -> Dict[str, Callable[..., Dict[str, Any]]]:
 
         return album_duplicates.merge(worker, details or {})
 
-    return {"fork_untranslated": translation, "fork_album_volumes": volumes,
+    def duplicate_tracks(entity_type: Any, entity_id: Any, file_path: Any, details: Any) -> Dict[str, Any]:
+        from core.fork import duplicate_placement
+
+        return duplicate_placement.fix(worker, entity_type, entity_id, file_path, details)
+
+    return {"duplicate_tracks": duplicate_tracks,
+            "fork_untranslated": translation, "fork_album_volumes": volumes,
             "fork_single_into_album": single_into_album, "fork_album_editions": editions,
             "fork_edition_gaps": edition_gaps, "fork_album_duplicates": duplicates}
 
