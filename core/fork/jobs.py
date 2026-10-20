@@ -637,8 +637,19 @@ def fix_handlers(worker: Any) -> Dict[str, Callable[..., Dict[str, Any]]]:
 
         return single_merge.merge(worker.db, details or {})
 
+    def editions(entity_type: Any, entity_id: Any, file_path: Any, details: Any) -> Dict[str, Any]:
+        from core.fork import edition_merge
+
+        return edition_merge.merge(worker, details or {})
+
+    def edition_gaps(entity_type: Any, entity_id: Any, file_path: Any, details: Any) -> Dict[str, Any]:
+        from core.fork import edition_merge
+
+        return edition_merge.fill_gaps(worker, details or {})
+
     return {"fork_untranslated": translation, "fork_album_volumes": volumes,
-            "fork_single_into_album": single_into_album}
+            "fork_single_into_album": single_into_album, "fork_album_editions": editions,
+            "fork_edition_gaps": edition_gaps}
 
 
 __all__ = ["apply_translation_finding", "describe_volumes", "fix_handlers", "group_volumes", "parse_volume",

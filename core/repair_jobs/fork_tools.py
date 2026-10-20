@@ -384,3 +384,110 @@ class LyricsTranslateJob(RepairJob):
         if redo and not dry_run and getattr(result, "completed", False):
             jobs.switch_off(self, context, "retranslate")
         return result
+
+
+@register_job
+class EditionMergeJob(RepairJob):
+    job_id = 'fork_edition_merge'
+    display_name = "Album Edition Merge"
+    description = "Finds editions of one album (Deluxe, Limited, Remastered…) and merges them into one"
+    help_text = (
+        'The library can hold one album several times: "25", "25 (Deluxe Edition)", "25 (Japan Edition)". '
+        "This finds those sets — same artist, same name apart from a note made only of packaging words "
+        "(Deluxe, Special, Limited, Expanded, Anniversary, Remastered, Bonus Tracks, a year, 初回限定盤…) — "
+        "and compares their songs. A note with any other word (Live, Acoustic, Remixes, Taylor's Version…) "
+        "keeps the album apart.\n\n"
+        "A song is the same in two editions when its title and its length match (within the duration "
+        "tolerance), or — when the titles differ — when its length and file size are all but equal. Two "
+        "editions are a set only when enough of the smaller one's songs match (minimum overlap) and "
+        "hardly any same-titled song differs in length (that would be another recording).\n\n"
+        "What happens to a set:\n"
+        "- the editions hold the same songs: the one with the plain name is kept, the others merge into it\n"
+        "- one edition holds every song of another: the smaller merges into it (the deluxe edition keeps "
+        "its bonus tracks)\n"
+        "- editions each hold songs the other lacks: they stay separate, and a second finding proposes "
+        "filling each up (copies from the library first, the wishlist for the rest); once one holds the "
+        "other, the next scan merges them\n"
+        "A set can have any number of editions.\n\n"
+        "Merging keeps one copy of each song — the better one (more data per second of audio) — filed under "
+        "the kept album with its title and track number. The other copy goes to the deleted-files folder, "
+        "where it can be restored.\n\n"
+        "Settings:\n"
+        "- Duration Tolerance: seconds two copies of a song may differ (default 3)\n"
+        "- Minimum Overlap: share of the smaller edition's songs that must match (default 0.5)\n"
+        "- Dry Run: only report (default); off merges straight away (filling up always waits for you)"
+    )
+    icon = "repair-icon-album"
+    default_enabled = False
+    default_interval_hours = 168
+    default_settings = {"duration_tolerance": 3, "min_overlap": 0.5, "dry_run": True}
+    auto_fix = True
+    writes_library_files = True
+
+    def scan(self, context: JobContext) -> JobResult:
+        from core.fork import edition_merge
+
+        result = JobResult()
+        settings = job_settings(self, context)
+        dry_run = is_on(settings.get("dry_run", True))
+        tolerance = float(settings.get("duration_tolerance", 3) or 3)
+        overlap = min(max(float(settings.get("min_overlap", 0.5) or 0.5), 0.1), 1.0)
+
+        def progress(done, total, label):
+            if context.report_progress and (done % 10 == 0 or done == total):
+                context.report_progress(scanned=done, total=total, phase=f"Comparing editions {done} / {total}",
+                                        log_line=label, log_type="info")
+
+        sets = edition_merge.find_sets(context.db, tolerance, overlap, check_stop=context.check_stop,
+                                       progress=progress)
+        result.scanned = len(sets)
+        for found in sets:
+            if context.check_stop():
+                return result
+            by_target = {}
+            for source, target in found["merges"]:
+                by_target.setdefault(str(target["id"]), (target, []))[1].append(source)
+            findings = [(edition_merge.MERGE_TYPE, edition_merge.merge_details(t, s, tolerance, 0.85))
+                        for t, s in by_target.values()]
+            if len(found["keepers"]) > 1:
+                findings.append((edition_merge.GAPS_TYPE, edition_merge.gaps_details(
+                    found["keepers"], [s for s, _t in found["merges"]])))
+            for kind, details in findings:
+                title, description = edition_merge.finding_text(kind, details)
+                if context.report_progress:
+                    context.report_progress(log_line=title, log_type="skip")
+                if kind == edition_merge.MERGE_TYPE and not dry_run:
+                    worker = getattr(context, "repair_worker", None) or _worker()
+                    applied = edition_merge.merge(worker, details) if worker else {"success": False}
+                    if applied.get("success"):
+                        result.auto_fixed += int(applied.get("fixed") or 0)
+                    else:
+                        result.errors += 1
+                    continue
+                if not context.create_finding:
+                    continue
+                entity = (details["target"]["album_id"] if kind == edition_merge.MERGE_TYPE
+                          else "+".join(sorted(str(a["album_id"]) for a in details["albums"])))
+                try:
+                    inserted = context.create_finding(
+                        job_id=self.job_id, finding_type=kind, severity="info", entity_type="album",
+                        entity_id=str(entity), file_path=None, title=title, description=description,
+                        details=details)
+                except Exception as exc:
+                    logger.debug("edition finding not created: %s", exc)
+                    result.errors += 1
+                    continue
+                if inserted:
+                    result.findings_created += 1
+                else:
+                    result.findings_skipped_dedup += 1
+        return result
+
+
+def _worker():
+    try:
+        from api.repair import _repair_worker
+
+        return _repair_worker()
+    except Exception:
+        return None

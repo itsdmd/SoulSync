@@ -6454,12 +6454,17 @@ FINDING_TYPE_META.update({
     'fork_untranslated':   {'label': 'Untranslated Names', 'verb': 'Apply Translation'},
     'fork_album_volumes':  {'label': 'Album Volumes', 'verb': 'Group Volumes'},
     'fork_single_into_album': {'label': 'Singles to Merge', 'verb': 'Merge Into Album'},
+    'fork_album_editions': {'label': 'Album Editions to Merge', 'verb': 'Merge Editions'},
+    'fork_edition_gaps': {'label': 'Editions Lacking Songs', 'verb': 'Fill Editions'},
 })
+# merging editions moves the duplicate copies to the deleted-files folder
+DESTRUCTIVE_FINDING_TYPES = DESTRUCTIVE_FINDING_TYPES | {'fork_album_editions'}
 JOB_CATEGORIES.update({
     'fork_auto_translate': 'Tags & metadata',
     'fork_volume_grouping': 'Tags & metadata',
     'fork_rating_sync': 'Tags & metadata',
     'fork_lyrics_translate': 'Artwork & lyrics',
+    'fork_edition_merge': 'Tags & metadata',
 })
 _upstream_fix_handlers = RepairWorker._fix_handlers
 
