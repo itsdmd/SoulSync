@@ -4,8 +4,10 @@ in ``core/repair_jobs/fork_tools.py``, where the framework looks for them).
 * **Auto Translate** — finds album and song names in the library that are
   still untranslated, translates them in batches (several names per model
   call), and applies the result to the files.
-* **Album Volume Grouping** — finds albums released as "…, Vol. 1", "…, Vol. 2"
-  and turns each set into ONE album whose volumes are its discs.
+* **Album Grouping** — finds albums released as "…, Vol. 1", "…, Vol. 2"
+  and turns each set into ONE album whose volumes are its discs; and albums
+  the library lists twice under one name, which it merges into one
+  (``core/fork/album_duplicates.py``).
 
 Both follow the framework's contract: the scan creates findings (dry run, the
 default) or applies them straight away; a finding's fix does the same work
@@ -162,7 +164,7 @@ def apply_translation_finding(db: Any, details: Dict[str, Any]) -> Dict[str, Any
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Album Volume Grouping
+# Album Grouping: volumes (duplicate albums are core/fork/album_duplicates.py)
 # ═══════════════════════════════════════════════════════════════════════
 
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10,
@@ -647,9 +649,14 @@ def fix_handlers(worker: Any) -> Dict[str, Callable[..., Dict[str, Any]]]:
 
         return edition_merge.fill_gaps(worker, details or {})
 
+    def duplicates(entity_type: Any, entity_id: Any, file_path: Any, details: Any) -> Dict[str, Any]:
+        from core.fork import album_duplicates
+
+        return album_duplicates.merge(worker, details or {})
+
     return {"fork_untranslated": translation, "fork_album_volumes": volumes,
             "fork_single_into_album": single_into_album, "fork_album_editions": editions,
-            "fork_edition_gaps": edition_gaps}
+            "fork_edition_gaps": edition_gaps, "fork_album_duplicates": duplicates}
 
 
 __all__ = ["apply_translation_finding", "describe_volumes", "fix_handlers", "group_volumes", "parse_volume",

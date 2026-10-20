@@ -341,18 +341,18 @@ def finding_text(kind: str, details: Dict[str, Any]) -> Tuple[str, str]:
 
 # ── the merge ───────────────────────────────────────────────────────────
 
-def _quarantine(worker: Any, path: str) -> Tuple[bool, Optional[str]]:
+def _quarantine(worker: Any, path: str, job: str = "fork_edition_merge") -> Tuple[bool, Optional[str]]:
     from core.repair_worker import _quarantine_file_if_present
 
     config = getattr(worker, "_config_manager", None)
     download = config.get("soulseek.download_path", "") if config else None
-    moved, note, _dest = _quarantine_file_if_present(path, worker.transfer_folder, "fork_edition_merge",
+    moved, note, _dest = _quarantine_file_if_present(path, worker.transfer_folder, job,
                                                      config_manager=config, download_folder=download)
     if moved:
         stem = os.path.splitext(path)[0]
         for suffix in (".lrc", ".txt", ".original.lrc", ".original.txt"):
             if os.path.isfile(stem + suffix):
-                _quarantine_file_if_present(stem + suffix, worker.transfer_folder, "fork_edition_merge",
+                _quarantine_file_if_present(stem + suffix, worker.transfer_folder, job,
                                             config_manager=config, download_folder=download)
     return moved, note
 
@@ -475,9 +475,31 @@ def merge(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "action": "editions_merged", "message": message, "fixed": removed + upgraded}
 
 
+def _folders(album: Dict[str, Any]) -> set:
+    return {os.path.dirname(os.path.realpath(t["path"])) for t in album["tracks"] if t.get("path")}
+
+
+def share_folder(albums: List[Dict[str, Any]]) -> bool:
+    """True when two of ``albums`` have files in one folder: that is one album
+    split into library rows, not two editions. Filling them from each other
+    would only copy files next to themselves (Album Grouping merges them)."""
+    seen: set = set()
+    for album in albums:
+        folders = _folders(album)
+        if folders & seen:
+            return True
+        seen |= folders
+    return False
+
+
 def fill_gaps(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
     """Fill each edition up with the stock Fill Album fixer (library copies
     first, the wishlist for the rest)."""
+    ids = [a.get("album_id") for a in details.get("albums") or [] if isinstance(a, dict)]
+    loaded = [single_merge._on_disk(a) for a in single_merge._load(worker.db, ids).values()] if ids else []
+    if share_folder(loaded):
+        return {"success": False, "error": "These are one album split into library rows (their files share a "
+                                           "folder), not editions: use Album Grouping to merge them"}
     messages, failed = [], []
     for album in details.get("albums") or []:
         if not isinstance(album, dict) or album.get("album_id") is None:
@@ -496,4 +518,4 @@ def fill_gaps(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
 
 
 __all__ = ["GAPS_TYPE", "MERGE_TYPE", "Pairing", "fill_gaps", "find_sets", "finding_text", "gaps_details",
-           "merge", "merge_details", "plan_set", "strip_editions"]
+           "merge", "merge_details", "plan_set", "share_folder", "strip_editions"]

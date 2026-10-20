@@ -739,7 +739,7 @@
         load();
     }
 
-    // ── Album Volume Grouping: edit a set before it is grouped ───────────
+    // ── Album Grouping: edit a set before it is grouped ───────────
     // Opened from the "Edit…" button of a finding on the Tools page.
 
     async function forkApi(path, body) {

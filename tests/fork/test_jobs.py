@@ -1,4 +1,4 @@
-"""The fork's Tools-page jobs: Auto Translate and Album Volume Grouping."""
+"""The fork's Tools-page jobs: Auto Translate and Album Grouping."""
 
 import os
 import sqlite3
@@ -315,7 +315,7 @@ def test_jobs_are_registered_with_handlers_labels_and_a_family():
     registry = get_all_jobs()
     assert registry["fork_auto_translate"].display_name == "Auto Translate"
     assert registry["fork_auto_translate"].default_settings["batch_size"] == 10
-    assert registry["fork_volume_grouping"].display_name == "Album Volume Grouping"
+    assert registry["fork_volume_grouping"].display_name == "Album Grouping"
     worker = RepairWorker.__new__(RepairWorker)
     handlers = worker._fix_handlers()
     assert {"fork_untranslated", "fork_album_volumes"} <= set(handlers) and "comma_artist_split" in handlers

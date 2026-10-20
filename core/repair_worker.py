@@ -6456,9 +6456,10 @@ FINDING_TYPE_META.update({
     'fork_single_into_album': {'label': 'Singles to Merge', 'verb': 'Merge Into Album'},
     'fork_album_editions': {'label': 'Album Editions to Merge', 'verb': 'Merge Editions'},
     'fork_edition_gaps': {'label': 'Editions Lacking Songs', 'verb': 'Fill Editions'},
+    'fork_album_duplicates': {'label': 'Duplicate Albums', 'verb': 'Merge Duplicates'},
 })
-# merging editions moves the duplicate copies to the deleted-files folder
-DESTRUCTIVE_FINDING_TYPES = DESTRUCTIVE_FINDING_TYPES | {'fork_album_editions'}
+# merging editions or duplicate albums moves the duplicate copies to the deleted-files folder
+DESTRUCTIVE_FINDING_TYPES = DESTRUCTIVE_FINDING_TYPES | {'fork_album_editions', 'fork_album_duplicates'}
 JOB_CATEGORIES.update({
     'fork_auto_translate': 'Tags & metadata',
     'fork_volume_grouping': 'Tags & metadata',

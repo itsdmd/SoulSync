@@ -108,7 +108,7 @@ def library_names(db: Any, kind: str, name: str, artist: str) -> List[Tuple[str,
             seen.add(key)
             pairs.append((title, by))
 
-    # A source lists "…, Vol. 2" as its own album; after Album Volume Grouping
+    # A source lists "…, Vol. 2" as its own album; after Album Grouping
     # the library holds one album with that volume as a disc.
     if kind == "album":
         base = _volume_base(name)

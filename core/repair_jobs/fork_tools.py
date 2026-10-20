@@ -3,8 +3,10 @@
 * **Auto Translate** — finds album and song names in the library that are
   still untranslated, translates them in batches (several names per model
   call), and applies the result to the files.
-* **Album Volume Grouping** — finds albums released as "…, Vol. 1", "…, Vol. 2"
-  and turns each set into ONE album whose volumes are its discs.
+* **Album Grouping** — finds albums released as "…, Vol. 1", "…, Vol. 2"
+  and turns each set into ONE album whose volumes are its discs; and albums
+  the library lists twice under one name, which it merges into one
+  (``core/fork/album_duplicates.py``).
 * **Rating Tag Sync** — copies star ratings between Navidrome and the rating
   tag in the files (``core/fork/rating_sync.py``).
 * **Lyrics Translator** — translates the lyrics files and embedded lyrics the
@@ -192,29 +194,40 @@ class AutoTranslateJob(RepairJob):
 @register_job
 class VolumeGroupingJob(RepairJob):
     job_id = 'fork_volume_grouping'
-    display_name = "Album Volume Grouping"
-    description = "Finds albums split into volumes and groups them into one album, with each volume as a disc"
+    display_name = "Album Grouping"
+    description = "Groups albums split into volumes into one album with discs, and merges albums listed twice"
     help_text = (
-        'Some releases come as several albums: "Footprints of the Traveler, Vol. 1", "…, Vol. 2", '
+        "Two kinds of albums that should be one.\n\n"
+        "Volumes. Some releases come as several albums: \"Footprints of the Traveler, Vol. 1\", \"…, Vol. 2\", "
         "and so on. This finds those sets — same artist, same name apart from the volume marker — "
         "and turns each into a single album: every track gets the common album name, and its volume "
-        "number becomes its disc number.\n\n"
+        "number becomes its disc number. "
         "Recognised markers: Vol. / Volume, Pt. / Part, Disc / CD with a number or Roman numeral, "
         "and 第N卷 / 第N集 / 卷N — after a comma, a dash, in brackets or with nothing in front. An album "
-        "with the same name and no marker counts as volume 1 when no other album claims that number.\n\n"
+        "with the same name and no marker counts as volume 1 when no other album claims that number. "
         "Two volumes are the minimum, and a set where two albums claim the same number is left alone. "
-        "In dry run mode (default) each set is a finding you approve; nothing changes until then. "
         "Edit… on a finding lets you add albums or folders to the set, remove some, rename the album "
         "and change each item's disc number first.\n\n"
+        "Duplicates. One album listed twice under the same name by the same artist — because one file "
+        "carries another MusicBrainz release id (enough for Navidrome to show a second album), because "
+        "its files sit in two folders, or because a song was copied in next to itself. Merging keeps "
+        "each song once (the better copy; the others go to the deleted-files folder, where they can be "
+        "restored), moves the files into one folder, gives every file the same release tags and joins "
+        "the library rows. A file holding another song's audio under this song's name goes too; two "
+        "copies of one song with clearly different lengths are kept and listed for you to check. Rows "
+        "with a different release group or year are different albums and stay apart.\n\n"
+        "In dry run mode (default) each set is a finding you approve; nothing changes until then.\n\n"
         "Settings:\n"
-        "- Move Files: also move the files into one album folder, in Disc 1, Disc 2… sub-folders "
-        "(off: only the tags change)\n"
+        "- Move Files: also move a volume set's files into one album folder, in Disc 1, Disc 2… "
+        "sub-folders (off: only the tags change)\n"
+        "- Merge Duplicates: also look for albums listed twice\n"
+        "- Duration Tolerance: seconds two copies of a song may differ by\n"
         "- Dry Run: only report, do not change files"
     )
     icon = "repair-icon-album"
     default_enabled = False
     default_interval_hours = 168
-    default_settings = {"move_files": True, "dry_run": True}
+    default_settings = {"move_files": True, "merge_duplicates": True, "duration_tolerance": 3, "dry_run": True}
     auto_fix = True
     writes_library_files = True
 
@@ -223,11 +236,17 @@ class VolumeGroupingJob(RepairJob):
         settings = job_settings(self, context)
         dry_run = is_on(settings.get("dry_run", True))
         move_files = is_on(settings.get("move_files", True))
+        self._volumes(context, result, dry_run, move_files)
+        if is_on(settings.get("merge_duplicates", True)) and not context.check_stop():
+            self._duplicates(context, result, dry_run, float(settings.get("duration_tolerance", 3) or 3))
+        return result
+
+    def _volumes(self, context: JobContext, result: JobResult, dry_run: bool, move_files: bool) -> None:
         groups = jobs.volume_groups(context.db)
         result.scanned = len(groups)
         for index, group in enumerate(groups, 1):
             if context.check_stop():
-                return result
+                return
             details = jobs.finding_details(group["album"], group["artist"], group["volumes"], move_files)
             numbers = details["volume_numbers"]
             title, description = jobs.finding_text(details)
@@ -264,7 +283,48 @@ class VolumeGroupingJob(RepairJob):
                     result.errors += 1
             if context.update_progress:
                 context.update_progress(index, len(groups))
-        return result
+
+    def _duplicates(self, context: JobContext, result: JobResult, dry_run: bool, tolerance: float) -> None:
+        from core.fork import album_duplicates
+
+        def progress(done: int, total: int, label: str) -> None:
+            if context.report_progress and (done % 10 == 0 or done == total):
+                context.report_progress(scanned=done, total=total, phase=f"Albums listed twice {done} / {total}",
+                                        log_line=f"Checking {label}", log_type="info")
+
+        sets = album_duplicates.find_sets(context.db, tolerance, check_stop=context.check_stop, progress=progress)
+        result.scanned += len(sets)
+        worker = None
+        for found in sets:
+            if context.check_stop():
+                return
+            details = {**found, "duration_tolerance": tolerance}
+            title, description = album_duplicates.finding_text(details)
+            if context.report_progress:
+                context.report_progress(log_line=f"{title}: {description}", log_type="warning")
+            if not dry_run:
+                worker = worker or getattr(context, "repair_worker", None) or _worker()
+                applied = album_duplicates.merge(worker, details) if worker else {"success": False}
+                if applied.get("success"):
+                    result.auto_fixed += int(applied.get("fixed") or 0)
+                else:
+                    result.errors += 1
+                continue
+            if not context.create_finding:
+                continue
+            try:
+                inserted = context.create_finding(
+                    job_id=self.job_id, finding_type=album_duplicates.FINDING_TYPE, severity="info",
+                    entity_type="album", entity_id=f'dup:{found["artist"]}:{fold(found["album"])}',
+                    file_path=found["target"]["folder"], title=title, description=description, details=details)
+                if inserted:
+                    result.findings_created += 1
+                else:
+                    result.findings_skipped_dedup += 1
+            except Exception as exc:
+                logger.debug("could not create finding for %r: %s", found["album"], exc)
+                result.errors += 1
+
 
 
 @register_job
@@ -449,7 +509,7 @@ class EditionMergeJob(RepairJob):
                 by_target.setdefault(str(target["id"]), (target, []))[1].append(source)
             findings = [(edition_merge.MERGE_TYPE, edition_merge.merge_details(t, s, tolerance, 0.85))
                         for t, s in by_target.values()]
-            if len(found["keepers"]) > 1:
+            if len(found["keepers"]) > 1 and not edition_merge.share_folder(found["keepers"]):
                 findings.append((edition_merge.GAPS_TYPE, edition_merge.gaps_details(
                     found["keepers"], [s for s, _t in found["merges"]])))
             for kind, details in findings:

@@ -440,7 +440,7 @@ def album_tag_apply():
     return jsonify(success=True, **data)
 
 
-# ── Album Volume Grouping: editing a set by hand ────────────────────────
+# ── Album Grouping: editing a set by hand ────────────────────────
 
 @bp.route("/api/fork/volumes/search", methods=["GET"])
 @admin_only

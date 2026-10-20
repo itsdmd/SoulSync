@@ -96,6 +96,7 @@ export const FINDING_TYPE_BLURBS: Record<string, string> = {
   fork_single_into_album: 'Singles that an album in the library lists but does not hold.',
   fork_album_editions: 'Editions of one album (Deluxe, Remastered…) to merge into one.',
   fork_edition_gaps: 'Editions of one album that each lack songs the other has.',
+  fork_album_duplicates: 'One album listed twice: duplicate copies, split tags or folders.',
 };
 
 export function findingTypeBlurb(findingType: string): string {

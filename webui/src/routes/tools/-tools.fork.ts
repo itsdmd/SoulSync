@@ -33,6 +33,7 @@ const FORK_FIX_LABELS: Record<string, string> = {
   fork_single_into_album: 'Merge',
   fork_album_editions: 'Merge',
   fork_edition_gaps: 'Fill',
+  fork_album_duplicates: 'Merge',
 };
 
 export function forkFixLabel(findingType: string): string | null {
