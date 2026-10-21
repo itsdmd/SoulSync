@@ -160,10 +160,17 @@ def _files(albums: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             entry["rows"].append({"id": track["id"], "album_id": album["id"]})
     names = {_key(a["title"]) for a in albums}
     # A folder named otherwise ("… (Dolby Atmos mix)") holds another release
-    # that a row happens to list too: its files stay where they are.
+    # that a row happens to list too: its files stay where they are. Unless
+    # its files carry a release id of the named folders (a "… (Deluxe)" folder
+    # the same release was downloaded into): they are this album.
     folders = {os.path.dirname(p) for p in by_path}
     named = {d for d in folders if _key(_album_dir_name(d)) in names}
     if named and named != folders:
+        releases = {e["tags"]["musicbrainz_albumid"] for p, e in by_path.items()
+                    if os.path.dirname(p) in named and e["tags"]["musicbrainz_albumid"]}
+        named |= {d for d in folders - named
+                  if any(os.path.dirname(p) == d and e["tags"]["musicbrainz_albumid"] in releases
+                         for p, e in by_path.items())}
         by_path = {p: e for p, e in by_path.items() if os.path.dirname(p) in named}
     # files of these folders no row lists (a row whose path went stale)
     for folder in sorted({os.path.dirname(p) for p in by_path}):
@@ -237,9 +244,50 @@ def _from_fill(entry: Dict[str, Any]) -> bool:
     return bool(entry["rows"]) and all(str(row["id"]).startswith("album_fill_") for row in entry["rows"])
 
 
-def plan(albums: List[Dict[str, Any]], tolerance: float = 3.0) -> Optional[Dict[str, Any]]:
+def official_tracks(albums: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """The track lists the listings' metadata sources give (each distinct
+    list once; a listing may point at another release)."""
+    out: List[List[Dict[str, Any]]] = []
+    for album in albums:
+        songs = single_merge.track_list(album)
+        if songs and songs not in out:
+            out.append(songs)
+    return out
+
+
+def _strangers(files: List[Dict[str, Any]], official: List[List[Dict[str, Any]]],
+               tolerance: float) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Files that are no song of the release: the title matches no song of
+    any list, and every list that is this album's (most files match a song
+    on it) has another song at the file's place, of a known, other length.
+    (A bonus track sits past the end of a shorter list and stays.)"""
+    def known(entry: Dict[str, Any], songs: List[Dict[str, Any]]) -> bool:
+        song = single_merge.version_of(entry["title"])[0]
+        return any(single_merge._same_title(entry["title"], o["title"], 0.85)
+                   or single_merge._same_song(song, single_merge.version_of(o["title"])[0], 0.85)
+                   for o in songs)
+
+    lists = [songs for songs in official if 2 * sum(1 for f in files if not known(f, songs)) < len(files)]
+    if not lists:
+        return []
+    out = []
+    for entry in files:
+        if any(known(entry, songs) for songs in official):
+            continue
+        places = [next((o for o in songs if (o["disc"], o["number"]) == (entry["disc"], int(entry["number"] or 0))),
+                       None) for songs in lists]
+        if all(song is not None and song["duration"] > 0 and entry["length"] > 0
+               and abs(song["duration"] - entry["length"]) > tolerance for song in places):
+            out.append((entry, places[0]))
+    return out
+
+
+def plan(albums: List[Dict[str, Any]], tolerance: float = 3.0,
+         official: Optional[List[List[Dict[str, Any]]]] = None) -> Optional[Dict[str, Any]]:
     """What merging ``albums`` (one album listed more than once, files on
-    disk) changes, or None when there is nothing to do."""
+    disk) changes, or None when there is nothing to do. ``official`` is the
+    release's track list (:func:`official_tracks`): a file of a song not on
+    it, at the place of one that is, goes too."""
     files = _files(albums)
     if len(files) < 2:
         return None
@@ -248,8 +296,15 @@ def plan(albums: List[Dict[str, Any]], tolerance: float = 3.0) -> Optional[Dict[
     def album_dir(entry: Dict[str, Any]) -> str:
         return album_identity.album_folder(entry["path"])
 
+    # one set of release tags, from the file whose release id most files carry
+    ids = Counter(f["tags"]["musicbrainz_albumid"] for f in files if f["tags"]["musicbrainz_albumid"])
+    pool = [f for f in files if not ids or f["tags"]["musicbrainz_albumid"] == ids.most_common(1)[0][0]]
+    reference = sorted(pool, key=lambda f: (-sum(1 for k in _RELEASE_FIELDS if f["tags"][k]), f["path"]))[0]
+    values = {k: reference["tags"][k] for k in _RELEASE_FIELDS if reference["tags"][k]}
+    # the folder named after that album ("Manic", not "Manic (44.1kHz_24bit)"), then the one holding most
     folders = Counter(album_dir(f) for f in files)
-    target_folder = sorted(folders, key=lambda d: (-folders[d], len(d), d))[0]
+    name = _key(values.get("album") or albums[0]["title"])
+    target_folder = sorted(folders, key=lambda d: (_key(os.path.basename(d)) != name, -folders[d], len(d), d))[0]
 
     removals: List[Dict[str, Any]] = []
     conflicts: List[Dict[str, Any]] = []
@@ -292,6 +347,12 @@ def plan(albums: List[Dict[str, Any]], tolerance: float = 3.0) -> Optional[Dict[
             removals.append({"path": member["path"], "title": member["title"], "kept": keep["path"],
                              "reason": "a second copy" if _rate(member) >= 0.95 * best_rate
                              else "a lower-quality copy"})
+    # a song that is not on the release, in the place of one that is
+    for entry, song in _strangers([f for f in files if f["path"] not in gone], official or [], tolerance):
+        gone.add(entry["path"])
+        removals.append({"path": entry["path"], "title": entry["title"], "kept": None,
+                         "reason": f'not a song of this album (track {song["number"]} is "{song["title"]}")',
+                         "wrong": True})
     kept = [f for f in files if f["path"] not in gone]
     by_song: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for entry in kept:
@@ -302,12 +363,6 @@ def plan(albums: List[Dict[str, Any]], tolerance: float = 3.0) -> Optional[Dict[
             conflicts.append({"title": same[0]["title"],
                               "files": [{"path": m["path"], "seconds": round(m["length"])} for m in same]})
 
-    # one set of release tags
-    ids = Counter(f["tags"]["musicbrainz_albumid"] for f in kept if f["tags"]["musicbrainz_albumid"])
-    pool = [f for f in kept if not ids or f["tags"]["musicbrainz_albumid"] == ids.most_common(1)[0][0]]
-    reference = sorted(pool, key=lambda f: (-sum(1 for k in _RELEASE_FIELDS if f["tags"][k]),
-                                            album_dir(f) != target_folder, f["path"]))[0]
-    values = {k: reference["tags"][k] for k in _RELEASE_FIELDS if reference["tags"][k]}
     retag = [f["path"] for f in kept if any(f["tags"][k] != v for k, v in values.items())]
     # a file in a "Disc N" sub-folder keeps it
     moves = [{"from": f["path"], "to": os.path.join(target_folder, os.path.relpath(f["path"], album_dir(f)))}
@@ -342,9 +397,39 @@ def _one_album(albums: List[Dict[str, Any]]) -> bool:
     return len(groups) <= 1 and len(years) <= 1
 
 
+def _parts(group: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """The albums of ``group`` (one artist, one name once edition notes are
+    dropped) that are one album: files in one folder make it one (an "X" and
+    an "X (Deluxe)" there are one album split into rows, whatever years their
+    tags give); one name makes it one when nothing they carry says otherwise
+    (:func:`_one_album`). An "X (Deluxe)" in its own folder is another edition
+    (Fill Editions)."""
+    from core.fork import edition_merge
+
+    parent = list(range(len(group)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    folders = [edition_merge._folders(a) for a in group]
+    for i, a in enumerate(group):
+        for j in range(i + 1, len(group)):
+            b = group[j]
+            if folders[i] & folders[j] or (_key(a["title"]) == _key(b["title"]) and _one_album([a, b])):
+                parent[root(j)] = root(i)
+    parts: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for i, album in enumerate(group):
+        parts[root(i)].append(album)
+    return [part for part in parts.values() if len(part) > 1]
+
+
 def find_sets(db: Any, tolerance: float = 3.0, check_stop: Optional[Callable[[], bool]] = None,
               progress: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]:
     """Every album the library lists more than once, with its merge plan."""
+    from core.fork.edition_merge import strip_editions
     from core.fork.jobs import parse_volume
 
     buckets: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
@@ -353,7 +438,7 @@ def find_sets(db: Any, tolerance: float = 3.0, check_stop: Optional[Callable[[],
         key = _key(album["title"])
         if not artist or not key or single_merge._is_single(album) or parse_volume(album["title"]):
             continue
-        buckets[(artist, key)].append(album)
+        buckets[(artist, _key(strip_editions(album["title"])[0]) or key)].append(album)
     work = [group for group in buckets.values() if len(group) > 1]
     out: List[Dict[str, Any]] = []
     for done, group in enumerate(work, 1):
@@ -366,20 +451,24 @@ def find_sets(db: Any, tolerance: float = 3.0, check_stop: Optional[Callable[[],
             continue
         for album in group:
             album["_files"] = _files([album])
-        if not _one_album(group):
-            continue
-        found = plan(group, tolerance)
-        if found:
-            out.append({"artist": group[0]["artist"], "album": found["target"]["title"], **found})
+        for part in _parts(group):
+            # the track list (a metadata lookup) only for sets with something to merge
+            found = plan(part, tolerance) and plan(part, tolerance, official_tracks(part))
+            if found:
+                out.append({"artist": part[0]["artist"], "album": found["target"]["title"], **found})
     return out
 
 
 def finding_text(details: Dict[str, Any]) -> Tuple[str, str]:
     count = len(details["albums"])
     parts = [f'{count} library albums → one ({details["kept"]} tracks)']
-    if details["removals"]:
-        parts.append(f'{len(details["removals"])} duplicate cop{"y" if len(details["removals"]) == 1 else "ies"} '
-                     "to the deleted-files folder")
+    copies = [r for r in details["removals"] if not r.get("wrong")]
+    wrong = [r for r in details["removals"] if r.get("wrong")]
+    if copies:
+        parts.append(f'{len(copies)} duplicate cop{"y" if len(copies) == 1 else "ies"} to the deleted-files folder')
+    if wrong:
+        parts.append(f'{len(wrong)} song(s) not on this album ({", ".join(r["title"] for r in wrong[:2])}) to the '
+                     "deleted-files folder, their places filled")
     if details["moves"]:
         parts.append(f'{len(details["moves"])} file(s) moved into "{os.path.basename(details["target"]["folder"])}"')
     if details["retag"]:
@@ -398,15 +487,18 @@ def merge(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
 
     db = worker.db
     ids = [a.get("album_id") for a in details.get("albums") or [] if isinstance(a, dict)]
-    albums = [a for a in map(single_merge._on_disk, single_merge._load(db, ids).values()) if a["tracks"]]
+    loaded = list(single_merge._load(db, ids).values())
+    listed = {a["id"]: [t["id"] for t in a["tracks"]] for a in loaded}
+    albums = [a for a in map(single_merge._on_disk, loaded) if a["tracks"]]
     if not albums:
         return {"success": True, "action": "already_gone", "message": "These albums have no files anymore"}
-    found = plan(albums, float(details.get("duration_tolerance") or 3.0)) if albums else None
+    found = plan(albums, float(details.get("duration_tolerance") or 3.0), official_tracks(albums))
     if not found:
         return {"success": True, "action": "already_merged", "message": "Nothing left to merge"}
     approved = {r.get("path") for r in details.get("removals") or [] if isinstance(r, dict)}
     problems: List[str] = []
     removed = moved = retagged = 0
+    wrong: List[str] = []
     files = {f["path"]: f for f in _files(albums)}
     gone_rows: List[Any] = []
     for removal in found["removals"]:
@@ -422,11 +514,17 @@ def merge(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
             problems.append(f"{os.path.basename(path)}: {note or 'could not move it away'}")
             continue
         removed += 1
+        if removal.get("wrong"):
+            wrong.append(removal["title"])
         rows = files[path]["rows"] if path in files else []
         kept = files.get(removal["kept"])
         if kept is not None and not kept["rows"] and rows:
             kept["rows"], rows = rows[:1], rows[1:]      # the kept copy had no row: it takes this one
         gone_rows += [r["id"] for r in rows]
+    # rows of files that are gone (the media server not rescanned yet) would keep a listing alive
+    for album in albums:
+        present = {t["id"] for t in album["tracks"]}
+        gone_rows += [tid for tid in listed.get(album["id"], []) if tid not in present]
     edition_merge._delete_rows(db, gone_rows)
 
     final: Dict[str, str] = {p: p for p in files if os.path.exists(p)}
@@ -481,9 +579,12 @@ def merge(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
         store.clear_album_checks()
     except Exception as exc:
         logger.debug("album checks not cleared: %s", exc)
+    filled = _refill(worker, found, albums) if wrong else ""
     message = (f'Merged {len(albums)} listings of "{found["target"]["title"]}" into one ({len(rows)} track rows): '
                f"{removed} duplicate copies moved to the deleted-files folder, {moved} file(s) moved, "
                f"{retagged} retagged")
+    if wrong:
+        message += f'; not on this album, removed: {", ".join(wrong[:3])} ({filled})'
     if found["conflicts"]:
         message += f'; check by hand: {", ".join(c["title"] for c in found["conflicts"][:3])}'
     if problems:
@@ -492,4 +593,19 @@ def merge(worker: Any, details: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "action": "duplicates_merged", "message": message, "fixed": removed + moved + retagged}
 
 
-__all__ = ["FINDING_TYPE", "find_sets", "finding_text", "merge", "plan", "read_release", "write_release"]
+def _refill(worker: Any, found: Dict[str, Any], albums: List[Dict[str, Any]]) -> str:
+    """Fill the places of the songs that were not this album's with the
+    stock Fill Album fixer (a library copy first, the wishlist otherwise)."""
+    target = next((a for a in albums if str(a["id"]) == str(found["target"]["album_id"])), albums[0])
+    sources = {source: value for album in [target, *albums] for source, value in reversed(album["sources"])}
+    info = {"album_id": target["id"], "album_title": found["target"]["title"], "artist": target["artist"],
+            "missing_tracks": [], **{f"{source}_album_id": value for source, value in sources.items()
+                                     if source in ("spotify", "itunes", "deezer", "discogs")}}
+    try:
+        result = worker._fix_incomplete_album("album", str(target["id"]), None, info)
+    except Exception as exc:
+        result = {"success": False, "error": str(exc)}
+    return str(result.get("message") or result.get("error") or "filled")
+
+
+__all__ = ["FINDING_TYPE", "find_sets", "finding_text", "merge", "official_tracks", "plan", "read_release", "write_release"]

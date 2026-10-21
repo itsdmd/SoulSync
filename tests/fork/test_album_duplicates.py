@@ -7,7 +7,7 @@ import shutil
 import pytest
 from mutagen.flac import FLAC
 
-from core.fork import album_duplicates, album_tagging, edition_merge, retro, tags
+from core.fork import album_duplicates, album_tagging, edition_merge, retro, single_merge, tags
 from core.repair_jobs.fork_tools import VolumeGroupingJob
 from tests.fork.test_edition_merge import Worker
 from tests.fork.test_single_merge import Ctx, Library
@@ -20,6 +20,8 @@ def lib(tmp_path, monkeypatch):
     monkeypatch.setattr(album_tagging, "_resolve", lambda p: p if p and os.path.isfile(p) else None)
     monkeypatch.setattr(tags, "_save", lambda audio: audio.save())
     monkeypatch.setattr(retro, "_update_db_path", lambda old, new: None)
+    monkeypatch.setattr(single_merge, "track_list", lambda album: library.official)
+    library.official = []
     return library
 
 
@@ -131,8 +133,9 @@ def test_different_years_or_folders_named_otherwise_stay_apart(lib):
     _row(lib, other, "One", 1, reissue, 150)
     assert album_duplicates.find_sets(lib) == []
 
-    # the same year, but the folder names another release (a Dolby Atmos mix): its files stay put
-    _tag(reissue, date="2015-03-15")
+    # the same year, but the folder names another release (a Dolby Atmos mix, its own release id): its
+    # files stay put
+    _tag(reissue, date="2015-03-15", musicbrainz_albumid="mb-atmos")
     os.rename(os.path.dirname(reissue), os.path.join(os.path.dirname(folder), "Butterfly (Dolby Atmos)"))
     conn = lib._get_connection()
     conn.execute("UPDATE tracks SET file_path = ? WHERE album_id = ?",
@@ -142,6 +145,96 @@ def test_different_years_or_folders_named_otherwise_stay_apart(lib):
     _tag(lib.row(ids[1])[2], musicbrainz_albumid="mb-2")
     [found] = album_duplicates.find_sets(lib)
     assert found["removals"] == [] and found["moves"] == []
+
+
+def test_a_folder_named_otherwise_holding_this_release_is_merged(lib):
+    # the same release downloaded again into "Butterfly (Deluxe)": the files say they are this album
+    ids = _album(lib, ["One", "Two", "Three"])
+    folder = os.path.dirname(lib.row(ids[0])[2])
+    other = _second_listing(lib)
+    deluxe = os.path.join(os.path.dirname(folder), "Butterfly (Deluxe)")
+    for n, tid in enumerate(ids[:2], 1):
+        _row(lib, other, ["One", "Two"][n - 1], n, _copy(lib.row(tid)[2], os.path.join(deluxe, f"0{n}. x.flac")), 150)
+    [found] = album_duplicates.find_sets(lib)
+    assert sorted(os.path.basename(r["path"]) for r in found["removals"]) == ["01. x.flac", "02. x.flac"]
+    assert found["target"]["folder"] == folder
+
+
+def test_an_edition_listing_in_the_same_folder_is_one_album(lib):
+    # "Butterfly (Deluxe)" rows of fill copies next to the songs they copy, with another year in their tags
+    ids = _album(lib, ["One", "Two"])
+    folder = os.path.dirname(lib.row(ids[0])[2])
+    other = _second_listing(lib, "Butterfly (Deluxe)")
+    copy = _copy(lib.row(ids[0])[2], os.path.join(folder, "1. One.flac"), album="Butterfly (Deluxe)",
+                 date="2012-01-01", musicbrainz_albumid="")
+    _row(lib, other, "One", 1, copy, 150)
+    [found] = album_duplicates.find_sets(lib)
+    assert len(found["albums"]) == 2 and [os.path.basename(r["path"]) for r in found["removals"]] == ["1. One.flac"]
+
+    # in a folder of its own it is another edition: Fill Editions' work, not this
+    moved = os.path.join(os.path.dirname(folder), "Butterfly (Deluxe)", "1. One.flac")
+    os.renames(copy, moved)
+    conn = lib._get_connection()
+    conn.execute("UPDATE tracks SET file_path = ? WHERE album_id = ?", (moved, other))
+    conn.commit()
+    conn.close()
+    assert album_duplicates.find_sets(lib) == []
+
+
+def test_files_move_into_the_folder_named_after_the_album(lib):
+    # most files sit in "Butterfly (24bit)", but the album is "Butterfly"
+    ids = _album(lib, ["One"])
+    folder = os.path.dirname(lib.row(ids[0])[2])
+    other = _second_listing(lib)
+    for n, song in enumerate(["Two", "Three"], 2):
+        path = _copy(lib.row(ids[0])[2], os.path.join(os.path.dirname(folder), "Butterfly (24bit)", f"0{n}. {song}.flac"),
+                     title=song)
+        _row(lib, other, song, n, path, 100 + 50 * n)
+    [found] = album_duplicates.find_sets(lib)
+    assert found["target"]["folder"] == folder and len(found["moves"]) == 2
+
+
+def test_a_song_not_on_the_album_goes_and_its_place_is_filled(lib):
+    ids = _album(lib, ["One", "Two", "Three"])
+    folder = os.path.dirname(lib.row(ids[0])[2])
+    other = _second_listing(lib)
+    copy = _copy(lib.row(ids[0])[2], os.path.join(folder, "1. One.flac"))
+    _row(lib, other, "One", 1, copy, 150)
+    # track 3 holds some other piece of music
+    _tag(lib.row(ids[2])[2], title="Orchestral Music: PULSE")
+    conn = lib._get_connection()
+    conn.execute("UPDATE tracks SET title = 'Orchestral Music: PULSE' WHERE id = ?", (ids[2],))
+    conn.commit()
+    conn.close()
+    lib.official = [{"title": t, "number": n, "disc": 1, "duration": 999.0}
+                    for n, t in enumerate(["One", "Two", "Three", "Bonus"], 1)]
+    [found] = album_duplicates.find_sets(lib)
+    wrong = [r for r in found["removals"] if r.get("wrong")]
+    assert [r["title"] for r in wrong] == ["Orchestral Music: PULSE"] and '"Three"' in wrong[0]["reason"]
+    assert "not on this album" in album_duplicates.finding_text(found)[1]
+    stranger = lib.row(ids[2])[2]
+    worker = Worker(lib)
+    result = album_duplicates.merge(worker, found)
+    assert result["success"] is True and worker.filled == ["Butterfly"], result
+    assert not os.path.exists(stranger) and lib.row(ids[2]) is None
+
+    # a list of another album flags nothing, and neither does a song on any list
+    other = [{"title": t, "number": n, "disc": 1, "duration": 999.0} for n, t in enumerate(["A", "B", "C"], 1)]
+    one = {"title": "One", "disc": 1, "number": 1, "length": 100}
+    assert album_duplicates._strangers([one], [other], 3.0) == []
+    mine = [{"title": t, "number": n, "disc": 1, "duration": 999.0} for n, t in enumerate(["Two", "One"], 1)]
+    assert album_duplicates._strangers([one, {**one, "title": "Two", "number": 2}], [mine, other], 3.0) == []
+
+
+def test_rows_of_files_that_are_gone_are_dropped(lib):
+    ids = _album(lib, ["One", "Two"])
+    folder = os.path.dirname(lib.row(ids[0])[2])
+    other = _second_listing(lib)
+    _row(lib, other, "One", 1, _copy(lib.row(ids[0])[2], os.path.join(folder, "1. One.flac")), 150)
+    _row(lib, other, "Two", 2, os.path.join(folder, "gone.flac"), 200)
+    [found] = album_duplicates.find_sets(lib)
+    assert album_duplicates.merge(Worker(lib), found)["success"] is True
+    assert lib.albums() == ["Butterfly"] and len(_db_rows(lib)) == 2
 
 
 def test_copies_of_different_lengths_are_left_for_a_look(lib):
