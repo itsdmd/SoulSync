@@ -313,6 +313,9 @@ def move_lyrics_backup(src_audio: Any, dst_audio: Any, with_partner: bool = Fals
         from core.fork import lyrics
 
         lyrics.move_backups(str(src_audio), str(dst_audio), with_partner)
+        # every place that moves audio calls this, so it is also where a
+        # video's thumbnail and cover (folder files, not same-stem) follow
+        move_video_art(src_audio, dst_audio)
         # the backup may have been the last thing in an import sub-folder
         from core.fork import config, import_move
 
@@ -330,6 +333,9 @@ def remove_lyrics_backup(audio_path: Any) -> None:
             from core.fork import lyrics
 
             lyrics.remove_backups(str(audio_path))
+            from core.fork import search_video_audio
+
+            search_video_audio.remove_art(audio_path)
     except Exception as exc:
         logger.debug("remove_lyrics_backup failed for %s: %s", audio_path, exc)
 
@@ -515,6 +521,31 @@ def youtube_extract_only(video_id: str) -> bool:
     except Exception as exc:
         logger.debug("extract-only check failed: %s", exc)
         return False
+
+
+def write_video_art(file_path: str, context: Any) -> bool:
+    """A Search page video's thumbnail and its square cover, beside the track."""
+    if not _active():
+        return False
+    try:
+        from core.fork import search_video_audio
+
+        return search_video_audio.write_art(file_path, context)
+    except Exception as exc:
+        logger.warning("write_video_art failed: %s", exc)
+        return False
+
+
+def move_video_art(src_audio: Any, dst_audio: Any) -> None:
+    """A track changed folder: its video thumbnail and cover go too."""
+    if not _active() or not src_audio or not dst_audio:
+        return
+    try:
+        from core.fork import search_video_audio
+
+        search_video_audio.move_art(src_audio, dst_audio)
+    except Exception as exc:
+        logger.warning("move_video_art failed for %s: %s", src_audio, exc)
 
 
 def write_video_lyrics(file_path: str, context: Any) -> bool:

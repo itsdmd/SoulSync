@@ -19,6 +19,11 @@ The audio is extracted, never re-encoded: whatever Settings → YouTube says
 about transcoding, these downloads take the best original stream (Opus, else
 AAC) and remux it. See ``extract_only`` and the wrappers in
 ``core/youtube_client.py``.
+
+4. the video's thumbnail is saved beside the audio as
+   ``original-thumbnail.<ext>`` (as YouTube served it) and a centred 1:1 crop
+   of it as ``cover.png``. Both names are fixed, so they belong to the folder,
+   and ``move_art`` carries them whenever the audio changes folder.
 """
 
 from __future__ import annotations
@@ -107,8 +112,9 @@ def pick_subtitle_language(subtitles: Dict[str, Any], language: str = "") -> str
 class Deps:
     # (query, limit) -> metadata Track objects (name, artists, album, ...)
     search_tracks: Callable[[str, int], List[Any]]
-    # video url -> (subtitle text in WebVTT or '', duration in seconds or 0)
-    fetch_subtitles: Callable[[str], Tuple[str, int]]
+    # video url -> (subtitle text in WebVTT or '', duration in seconds or 0,
+    #               path of the downloaded thumbnail or '')
+    fetch_info: Callable[[str], Tuple[str, int, str]]
     # (task info, candidate, batch name, profile id) -> (batch_id, task_id)
     queue: Callable[[Dict[str, Any], Dict[str, Any], str, Any], Tuple[str, str]]
     # task id -> {'status', 'download_id', 'error_message'} or None
@@ -144,7 +150,8 @@ def _match(raw_title: str, raw_channel: str, deps: Deps) -> Tuple[str, str, Any]
     return artist, title, None
 
 
-def track_info(artist: str, title: str, track: Any, duration_s: int, lrc: str) -> Dict[str, Any]:
+def track_info(artist: str, title: str, track: Any, duration_s: int, lrc: str,
+               thumbnail: str = "") -> Dict[str, Any]:
     """What the pinned task is tagged and filed by. The length is the video's,
     not the matched recording's: a video with an intro is longer, and the
     import's length check must not quarantine it for that."""
@@ -175,6 +182,8 @@ def track_info(artist: str, title: str, track: Any, duration_s: int, lrc: str) -
             info["duration_ms"] = int(getattr(track, "duration_ms", 0) or 0)
     if lrc:
         info["_youtube_lrc"] = lrc
+    if thumbnail:
+        info["_youtube_thumbnail"] = thumbnail
     return info
 
 
@@ -204,20 +213,20 @@ def run(video_id: str, video: Dict[str, Any], profile_id: Any, deps: Deps) -> No
     url = str(video.get("url") or "")
     try:
         artist, title, track = _match(raw_title, raw_channel, deps)
-        lrc, duration = "", 0
+        lrc, duration, thumbnail = "", 0, ""
         try:
-            vtt, duration = deps.fetch_subtitles(url)
+            vtt, duration, thumbnail = deps.fetch_info(url)
             lrc = vtt_to_lrc(vtt) if vtt else ""
             if lrc:
                 logger.info("[Video Audio] Subtitles found for %s, kept as lyrics", video_id)
-        except Exception as exc:  # noqa: BLE001 - lyrics are a bonus, never a reason to fail
-            logger.debug("[Video Audio] subtitle fetch failed for %s: %s", video_id, exc)
+        except Exception as exc:  # noqa: BLE001 - lyrics and art are a bonus, never a reason to fail
+            logger.debug("[Video Audio] subtitle/thumbnail fetch failed for %s: %s", video_id, exc)
         if not duration:
             try:
                 duration = int(float(video.get("duration") or 0))
             except (TypeError, ValueError):
                 duration = 0
-        info = track_info(artist, title, track, duration, lrc)
+        info = track_info(artist, title, track, duration, lrc, thumbnail)
         candidate = {
             "username": "youtube",
             "filename": f"{video_id}||{raw_title or title}",
@@ -311,8 +320,67 @@ def write_lyrics(file_path: str, context: Any) -> bool:
 
 # ── the app's side, wired by web_server ─────────────────────────────────
 
-def fetch_subtitles(url: str) -> Tuple[str, int]:
-    """(the uploader's subtitles as WebVTT or '', the video's length in s)."""
+def _thumbnail_urls(info: Dict[str, Any]) -> List[str]:
+    """The video's pictures, biggest first (maxresdefault, hq720, ...), the
+    .jpg of each before its .webp twin. yt-dlp's own pick is the 4:3
+    hqdefault, which has black bars above and below a 16:9 video: a centred
+    square taken from that would include them."""
+    listed = [t for t in (info.get("thumbnails") or []) if isinstance(t, dict) and t.get("url")]
+    listed.sort(key=lambda t: (t.get("preference") or 0), reverse=True)
+    urls: List[str] = []
+    for t in listed:
+        url = str(t["url"])
+        if url.split("?")[0].lower().endswith(".webp"):
+            twin = url.replace("/vi_webp/", "/vi/").replace(".webp", ".jpg")
+            if twin not in urls:
+                urls.append(twin)
+        elif url not in urls:
+            urls.append(url)
+    if info.get("thumbnail") and str(info["thumbnail"]) not in urls:
+        urls.append(str(info["thumbnail"]))
+    return urls
+
+
+def _download_thumbnail(ydl: Any, urls: List[str], video_id: str) -> str:
+    """Save the first picture that downloads to a temp file as served; its
+    path, '' when none does. The import moves it next to the audio once that
+    has a final folder."""
+    for url in urls[:6]:
+        path = _download_one_thumbnail(ydl, url, video_id)
+        if path:
+            return path
+    return ""
+
+
+def _download_one_thumbnail(ydl: Any, url: str, video_id: str) -> str:
+    import mimetypes
+    import os
+    import tempfile
+    from urllib.parse import urlparse
+
+    if not url:
+        return ""
+    try:
+        with ydl.urlopen(url) as resp:
+            data = resp.read()
+            ctype = str(resp.headers.get("Content-Type") or "").split(";")[0].strip()
+        ext = os.path.splitext(urlparse(url).path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+            ext = (mimetypes.guess_extension(ctype) or ".jpg").replace(".jpe", ".jpg")
+        folder = os.path.join(tempfile.gettempdir(), "soulsync-video-thumbs")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, re.sub(r"[^\w-]", "_", video_id or "video") + ext)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path if data else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[Video Audio] thumbnail not fetched: %s", exc)
+        return ""
+
+
+def fetch_info(url: str) -> Tuple[str, int, str]:
+    """(the uploader's subtitles as WebVTT or '', the video's length in s,
+    the downloaded thumbnail's temp path or '')."""
     import yt_dlp
 
     from core.youtube_client import _resolve_cookie_opts, youtube_authenticated_extractor_args
@@ -325,16 +393,19 @@ def fetch_subtitles(url: str) -> Tuple[str, int]:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False) or {}
         duration = int(info.get("duration") or 0)
+        thumbnail = _download_thumbnail(ydl, _thumbnail_urls(info), str(info.get("id") or ""))
         subtitles = info.get("subtitles") or {}
         lang = pick_subtitle_language(subtitles, str(info.get("language") or ""))
-        if not lang:
-            return "", duration
-        tracks = [t for t in subtitles[lang] if isinstance(t, dict) and t.get("url")]
+        tracks = [t for t in (subtitles.get(lang) or []) if isinstance(t, dict) and t.get("url")] if lang else []
         vtt = next((t for t in tracks if t.get("ext") == "vtt"), None)
         if not vtt:
-            return "", duration
-        with ydl.urlopen(vtt["url"]) as resp:
-            return resp.read().decode("utf-8", "replace"), duration
+            return "", duration, thumbnail
+        try:
+            with ydl.urlopen(vtt["url"]) as resp:
+                return resp.read().decode("utf-8", "replace"), duration, thumbnail
+        except Exception as exc:  # noqa: BLE001 - the thumbnail is already in hand
+            logger.debug("[Video Audio] subtitles not fetched: %s", exc)
+            return "", duration, thumbnail
 
 
 def queue_pinned(info: Dict[str, Any], candidate: Dict[str, Any], name: str, profile_id: Any,
@@ -367,6 +438,149 @@ def task_snapshot(task_id: str) -> Optional[Dict[str, Any]]:
         return {k: task.get(k) for k in ("status", "download_id", "error_message")}
 
 
+# ── the thumbnail and its 1:1 cover ─────────────────────────────────────
+
+ORIGINAL_STEM = "original-thumbnail"
+COVER_NAME = "cover.png"
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
+
+
+def _original_thumbnails(folder: str) -> List[str]:
+    import os
+
+    try:
+        return [n for n in os.listdir(folder)
+                if n.lower().startswith(ORIGINAL_STEM + ".") and n.lower().endswith(_IMAGE_EXTS)]
+    except OSError:
+        return []
+
+
+def _has_other_audio(folder: str, audio_path: str = "") -> bool:
+    import os
+
+    from core.tag_writer import SUPPORTED_EXTENSIONS
+
+    me = os.path.basename(audio_path)
+    try:
+        return any(os.path.splitext(n)[1].lower() in SUPPORTED_EXTENSIONS and n != me
+                   for n in os.listdir(folder))
+    except OSError:
+        return False
+
+
+def crop_square_png(src: str, dst: str) -> None:
+    """A 1:1 crop of the centre of ``src``, saved as PNG at ``dst``."""
+    from PIL import Image
+
+    with Image.open(src) as img:
+        img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+        side = min(img.size)
+        left, top = (img.width - side) // 2, (img.height - side) // 2
+        img.crop((left, top, left + side, top + side)).save(dst, "PNG")
+
+
+def write_art(file_path: str, context: Any) -> bool:
+    """Put the video's thumbnail beside the imported audio: the picture as
+    served (``original-thumbnail.<ext>``) and its centred square crop
+    (``cover.png``). An existing ``original-thumbnail.*`` is kept. An existing
+    ``cover.png`` is replaced only when this is the folder's one track, so a
+    video filed into an album never overwrites the album's cover."""
+    import os
+    import shutil
+
+    from core.imports.context import get_import_track_info, normalize_import_context
+
+    thumb = get_import_track_info(normalize_import_context(context)).get("_youtube_thumbnail")
+    if not thumb or not file_path or not os.path.isfile(thumb):
+        return False
+    folder = os.path.dirname(file_path)
+    if not _original_thumbnails(folder):
+        ext = os.path.splitext(thumb)[1].lower() or ".jpg"
+        shutil.copyfile(thumb, os.path.join(folder, ORIGINAL_STEM + ext))
+    cover = os.path.join(folder, COVER_NAME)
+    if not os.path.exists(cover) or not _has_other_audio(folder, file_path):
+        crop_square_png(thumb, cover)
+    try:
+        os.remove(thumb)
+    except OSError:
+        pass
+    logger.info("[Video Audio] Thumbnail and cover saved in %s", folder)
+    return True
+
+
+def _same_file(a: str, b: str) -> bool:
+    import filecmp
+
+    try:
+        return filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return False
+
+
+def move_art(src_audio: Any, dst_audio: Any) -> List[str]:
+    """After a track changed folder: bring its ``original-thumbnail.*`` and
+    ``cover.png`` along. Called from every place that moves audio (see
+    ``hooks.move_lyrics_backup``).
+
+    * the old folder is left with no audio: the files are moved, so nothing is
+      stranded and the folder can be tidied away;
+    * other tracks stay behind: they still need them, so the files are copied;
+    * a file the new folder already has is never replaced (an identical one
+      left in the old folder is removed so nothing is stranded).
+
+    ``cover.png`` only travels when the folder holds an ``original-thumbnail``,
+    i.e. when it is the video's cover rather than an album's. Best-effort,
+    returns the destination paths that were written."""
+    import os
+    import shutil
+
+    written: List[str] = []
+    src_dir = os.path.dirname(str(src_audio))
+    dst_dir = os.path.dirname(str(dst_audio))
+    if not src_dir or not dst_dir or os.path.normpath(src_dir) == os.path.normpath(dst_dir):
+        return written
+    names = _original_thumbnails(src_dir)
+    if not names:
+        return written
+    if os.path.isfile(os.path.join(src_dir, COVER_NAME)):
+        names.append(COVER_NAME)
+    leaving = not _has_other_audio(src_dir)
+    for name in names:
+        src, dst = os.path.join(src_dir, name), os.path.join(dst_dir, name)
+        try:
+            if os.path.exists(dst):
+                if leaving and _same_file(src, dst):
+                    os.remove(src)
+                continue
+            os.makedirs(dst_dir, exist_ok=True)
+            (shutil.move if leaving else shutil.copy2)(src, dst)
+            written.append(dst)
+        except OSError as exc:
+            logger.warning("Could not carry %s with its track: %s", src, exc)
+    if written:
+        logger.info("%s %d thumbnail file(s) with their track to %s",
+                    "Moved" if leaving else "Copied", len(written), dst_dir)
+    return written
+
+
+def remove_art(audio_path: Any) -> None:
+    """After a track was deleted: when it was the folder's last one, its video
+    thumbnail and cover go too instead of keeping the folder alive."""
+    import os
+
+    folder = os.path.dirname(str(audio_path))
+    names = _original_thumbnails(folder) if folder else []
+    if not names or _has_other_audio(folder):
+        return
+    if os.path.isfile(os.path.join(folder, COVER_NAME)):
+        names.append(COVER_NAME)
+    for name in names:
+        try:
+            os.remove(os.path.join(folder, name))
+        except OSError as exc:
+            logger.debug("Could not remove %s: %s", name, exc)
+
+
 def install(app: Any, *, run_async: Callable, orchestrator: Callable, metadata_client: Callable,
             pinned_deps: Callable, check_permission: Callable, profile_id: Callable,
             add_activity: Callable) -> None:
@@ -384,7 +598,7 @@ def install(app: Any, *, run_async: Callable, orchestrator: Callable, metadata_c
     def _deps() -> Deps:
         return Deps(
             search_tracks=lambda query, limit: metadata_client().search_tracks(query, limit=limit),
-            fetch_subtitles=fetch_subtitles,
+            fetch_info=fetch_info,
             queue=lambda info, candidate, name, pid: queue_pinned(info, candidate, name, pid, pinned_deps()),
             task=task_snapshot,
             progress=_progress,

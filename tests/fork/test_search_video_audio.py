@@ -79,7 +79,7 @@ class FakeApp:
         self.tasks = {}
         self.percent = {}
 
-    def deps(self, results=(), subs=("", 0)):
+    def deps(self, results=(), subs=("", 0, "")):
         def queue(info, candidate, name, profile_id):
             self.queued.append((info, candidate, name, profile_id))
             self.tasks["t1"] = {"status": "queued", "download_id": None}
@@ -87,7 +87,7 @@ class FakeApp:
 
         return sva.Deps(
             search_tracks=lambda q, n: list(results),
-            fetch_subtitles=lambda url: subs,
+            fetch_info=lambda url: subs,
             queue=queue,
             task=lambda tid: self.tasks.get(tid),
             progress=lambda did: self.percent.get(did),
@@ -101,10 +101,11 @@ VIDEO = {"video_id": "fJ9rUzIMcZQ", "url": "https://www.youtube.com/watch?v=fJ9r
 
 
 def test_a_click_queues_the_audio_as_a_pinned_youtube_task():
+    thumb = "/tmp/x/fJ9rUzIMcZQ.jpg"
     fake = FakeApp()
     match = Track(id="9", name="Bohemian Rhapsody", artists=["Queen"], album="A Night at the Opera",
                   duration_ms=354000, popularity=0)
-    deps = fake.deps(results=[match], subs=(VTT, 360))
+    deps = fake.deps(results=[match], subs=(VTT, 360, thumb))
 
     assert sva.start(VIDEO, 7, deps) == {"success": True, "video_id": "fJ9rUzIMcZQ"}
     info, candidate, name, profile_id = fake.queued[0]
@@ -114,6 +115,7 @@ def test_a_click_queues_the_audio_as_a_pinned_youtube_task():
     assert info["album"]["name"] == "A Night at the Opera"
     assert info["duration_ms"] == 360000
     assert info["_youtube_lrc"].startswith("[00:01.00]Is this the real life?")
+    assert info["_youtube_thumbnail"] == thumb
     assert sva.extract_only("fJ9rUzIMcZQ")
 
     # running: progress from the download; a second click is refused
@@ -181,3 +183,151 @@ def test_an_extract_only_download_remuxes_the_best_original_stream(monkeypatch):
     yt.YouTubeClient._download_sync(client, "https://www.youtube.com/watch?v=aaaaaaaaaaa", "t")
     assert seen[0] == ({"key": "FFmpegExtractAudio", "preferredcodec": "best"}, "opus_256")
     assert seen[1] == ({"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "320"}, "mp3_320")
+
+
+# ── thumbnail and cover ─────────────────────────────────────────────────
+
+def _image(path, size=(160, 90), color=(200, 30, 30)):
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", size, color)
+    # a marker in the centre so the crop can be told from the whole picture
+    for x in range(size[0] // 2 - 5, size[0] // 2 + 5):
+        for y in range(size[1] // 2 - 5, size[1] // 2 + 5):
+            img.putpixel((x, y), (0, 255, 0))
+    img.save(path)
+    return str(path)
+
+
+def _ctx(thumb):
+    return {"track_info": {"name": "x", "_youtube_thumbnail": thumb}}
+
+
+def test_square_crop_takes_the_centre(tmp_path):
+    from PIL import Image
+
+    src = _image(tmp_path / "wide.jpg", (160, 90))
+    sva.crop_square_png(src, str(tmp_path / "cover.png"))
+    with Image.open(tmp_path / "cover.png") as cover:
+        assert cover.format == "PNG" and cover.size == (90, 90)
+        centre, corner = cover.getpixel((45, 45)), cover.getpixel((2, 2))
+        assert centre[1] > 200 and centre[0] < 60               # the centre marker survived (jpeg is lossy)
+        assert corner[0] > 180 and corner[1] < 60
+
+
+def test_thumbnail_and_cover_are_saved_beside_the_audio(tmp_path):
+    thumb = _image(tmp_path / "tmp" / "vid.webp")
+    lib = tmp_path / "lib" / "Queen" / "Bohemian Rhapsody"
+    lib.mkdir(parents=True)
+    audio = lib / "Queen - Bohemian Rhapsody.opus"
+    audio.write_bytes(b"x")
+    (lib / "cover.png").write_bytes(b"album art from the pipeline")
+
+    assert hooks.write_video_art(str(audio), _ctx(thumb)) is True
+    assert (lib / "original-thumbnail.webp").is_file()
+    assert (lib / "cover.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"     # the crop replaced the lone track's cover
+    assert not (tmp_path / "tmp" / "vid.webp").exists()
+    assert hooks.write_video_art(str(audio), _ctx(thumb)) is False      # nothing left to place
+    assert hooks.write_video_art(str(audio), {"track_info": {"name": "x"}}) is False
+
+
+def test_a_video_in_an_album_folder_keeps_the_albums_cover(tmp_path):
+    thumb = _image(tmp_path / "tmp" / "vid.jpg")
+    album = tmp_path / "lib" / "Queen" / "A Night at the Opera"
+    album.mkdir(parents=True)
+    (album / "01 Death on Two Legs.flac").write_bytes(b"x")
+    audio = album / "11 Bohemian Rhapsody.opus"
+    audio.write_bytes(b"x")
+    (album / "cover.png").write_bytes(b"album cover")
+
+    hooks.write_video_art(str(audio), _ctx(thumb))
+    assert (album / "cover.png").read_bytes() == b"album cover"
+    assert (album / "original-thumbnail.jpg").is_file()
+
+
+def _filed(tmp_path, name="a"):
+    folder = tmp_path / name
+    folder.mkdir()
+    audio = folder / "Song.opus"
+    audio.write_bytes(b"x")
+    (folder / "original-thumbnail.jpg").write_bytes(b"orig")
+    (folder / "cover.png").write_bytes(b"crop")
+    return folder, audio
+
+
+def test_thumbnail_and_cover_move_with_the_last_track(tmp_path):
+    src, audio = _filed(tmp_path)
+    dst = tmp_path / "b"
+    dst.mkdir()
+    new = dst / "Song.opus"
+    audio.rename(new)
+
+    hooks.move_lyrics_backup(audio, new)      # the call every audio-moving site already makes
+    assert (dst / "original-thumbnail.jpg").read_bytes() == b"orig"
+    assert (dst / "cover.png").read_bytes() == b"crop"
+    assert not (src / "original-thumbnail.jpg").exists() and not (src / "cover.png").exists()
+
+
+def test_thumbnail_is_copied_while_other_tracks_stay_behind(tmp_path):
+    src, audio = _filed(tmp_path)
+    (src / "Other.opus").write_bytes(b"x")
+    dst = tmp_path / "b"
+    dst.mkdir()
+    new = dst / "Song.opus"
+    audio.rename(new)
+
+    hooks.move_lyrics_backup(audio, new)
+    assert (dst / "original-thumbnail.jpg").is_file() and (dst / "cover.png").is_file()
+    assert (src / "original-thumbnail.jpg").is_file() and (src / "cover.png").is_file()
+
+
+def test_travel_never_replaces_and_leaves_nothing_stranded(tmp_path):
+    src, audio = _filed(tmp_path)
+    dst = tmp_path / "b"
+    dst.mkdir()
+    (dst / "original-thumbnail.jpg").write_bytes(b"orig")      # same picture already there
+    (dst / "cover.png").write_bytes(b"theirs")
+    new = dst / "Song.opus"
+    audio.rename(new)
+
+    sva.move_art(audio, new)
+    assert (dst / "cover.png").read_bytes() == b"theirs"
+    assert not (src / "original-thumbnail.jpg").exists()       # identical copy removed from the old folder
+    assert (src / "cover.png").exists()                        # a different one is not ours to delete
+
+
+def test_an_album_cover_alone_is_not_taken_along(tmp_path):
+    src = tmp_path / "a"
+    src.mkdir()
+    audio = src / "Song.flac"
+    audio.write_bytes(b"x")
+    (src / "cover.png").write_bytes(b"album")
+    dst = tmp_path / "b"
+    dst.mkdir()
+    new = dst / "Song.flac"
+    audio.rename(new)
+
+    assert sva.move_art(audio, new) == []
+    assert not (dst / "cover.png").exists()
+
+
+def test_tag_editor_move_and_delete_handle_the_thumbnail(tmp_path):
+    src, audio = _filed(tmp_path)
+    audio.unlink()
+    hooks.remove_lyrics_backup(str(audio))     # the delete paths call this after removing the file
+    assert not (src / "original-thumbnail.jpg").exists() and not (src / "cover.png").exists()
+
+
+def test_thumbnails_are_tried_biggest_first_jpg_before_webp():
+    info = {"thumbnail": "https://i.ytimg.com/vi/ID/hqdefault.jpg", "thumbnails": [
+        {"url": "https://i.ytimg.com/vi/ID/hqdefault.jpg", "preference": -7},
+        {"url": "https://i.ytimg.com/vi_webp/ID/maxresdefault.webp", "preference": 0},
+        {"url": "https://i.ytimg.com/vi/ID/maxresdefault.jpg", "preference": -1},
+        {"url": "https://i.ytimg.com/vi/ID/hq720.jpg", "preference": -3},
+    ]}
+    assert sva._thumbnail_urls(info) == [
+        "https://i.ytimg.com/vi/ID/maxresdefault.jpg",
+        "https://i.ytimg.com/vi/ID/hq720.jpg",
+        "https://i.ytimg.com/vi/ID/hqdefault.jpg",
+    ]

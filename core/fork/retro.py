@@ -626,6 +626,9 @@ def _move_file(src: str, dst: str) -> None:
     for suffix in _SIDECARS:
         if os.path.isfile(src_stem + suffix) and not os.path.exists(dst_stem + suffix):
             shutil.move(src_stem + suffix, dst_stem + suffix)
+    from core.fork import hooks
+
+    hooks.move_video_art(src, dst)           # a video's thumbnail and cover follow
     _update_db_path(src, dst)
 
 

@@ -495,6 +495,10 @@ def move(paths: List[Any], destination: Any, db: Any = None) -> Dict[str, Any]:
                     library_index.moved(src, dst, False)
                 except OSError as exc:
                     logger.warning("lyrics file %s not moved: %s", src, exc)
+            if not is_dir:
+                from core.fork import hooks
+
+                hooks.move_video_art(old, new)     # a video's thumbnail and cover follow
             _repoint_library(db, old, new, is_dir)
             library_index.moved(old, new, is_dir)
             moved.append(new)
