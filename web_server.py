@@ -23105,6 +23105,12 @@ app.register_blueprint(_bp_qp())
 # fork (itsdmd/SoulSync): LLM settings, translations, artist rules. See FORK.md.
 from api.fork import create_blueprint as _bp_fork
 app.register_blueprint(_bp_fork())
+# fork: a Search page video is downloaded as audio into the music library.
+from core.fork import search_video_audio as _fork_video_audio
+_fork_video_audio.install(app, run_async=run_async, orchestrator=lambda: download_orchestrator,
+                          metadata_client=_get_metadata_fallback_client, pinned_deps=_pinned_batch_deps,
+                          check_permission=check_download_permission, profile_id=get_current_profile_id,
+                          add_activity=add_activity_item)
 from api.auto_import import configure as _cfg_ai, create_blueprint as _bp_ai
 def _get_auto_import_worker():
     # the worker handle lives (and is rebound) in api.import_routes

@@ -71,7 +71,8 @@ def generate_lrc_file(file_path: str, context: dict, artist: dict, album_info: d
 
 
 # ── fork (itsdmd/SoulSync) ──────────────────────────────────────────────
-# Rename-only imports must not embed lyrics into the file. See FORK.md.
+# Rename-only imports must not embed lyrics into the file; a Search page
+# video's subtitles are its lyrics. See FORK.md.
 _upstream_generate_lrc_file = generate_lrc_file
 
 
@@ -79,4 +80,6 @@ def generate_lrc_file(file_path: str, context: dict, artist: dict, album_info: d
     from core.fork import hooks as _fork_hooks
     if _fork_hooks.is_rename_only(context):
         return False
+    if _fork_hooks.write_video_lyrics(file_path, context):
+        return True
     return _upstream_generate_lrc_file(file_path, context, artist, album_info)

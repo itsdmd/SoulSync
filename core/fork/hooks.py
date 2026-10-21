@@ -503,6 +503,34 @@ def youtube_watch(client_logger: Any) -> None:
         logger.warning("YouTube gate not installed: %s", exc)
 
 
+def youtube_extract_only(video_id: str) -> bool:
+    """Whether this YouTube download must remux the original audio stream
+    rather than follow the transcode setting (a Search page video)."""
+    if not _active() or not video_id:
+        return False
+    try:
+        from core.fork import search_video_audio
+
+        return search_video_audio.extract_only(video_id)
+    except Exception as exc:
+        logger.debug("extract-only check failed: %s", exc)
+        return False
+
+
+def write_video_lyrics(file_path: str, context: Any) -> bool:
+    """A Search page video's subtitles as the track's .lrc. True when the
+    sidecar was written (and embedded), so LRClib is not asked."""
+    if not _active():
+        return False
+    try:
+        from core.fork import search_video_audio
+
+        return search_video_audio.write_lyrics(file_path, context)
+    except Exception as exc:
+        logger.warning("write_video_lyrics failed: %s", exc)
+        return False
+
+
 def youtube_blocked() -> bool:
     """Whether YouTube is refusing this address and must be left alone."""
     if not _active():

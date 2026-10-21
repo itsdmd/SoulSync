@@ -2336,7 +2336,34 @@ def _fork_download_sync(self, youtube_url, title):
     if _fork_hooks.youtube_blocked():
         logger.warning("YouTube is refusing this address; not trying %s (paused, see earlier warning)", title)
         return None
-    return _upstream_download_sync(self, youtube_url, title)
+    # a Search page video is extracted, never re-encoded (core/fork/search_video_audio.py)
+    extract = _fork_hooks.youtube_extract_only(self._video_id_from_url(youtube_url))
+    _fork_extract.on = extract
+    try:
+        return _upstream_download_sync(self, youtube_url, title)
+    finally:
+        _fork_extract.on = False
+
+
+# _download_sync looks these up by name on every attempt, so rebinding them
+# here is what makes an extract-only download remux the best original stream
+import threading as _fork_threading  # noqa: E402
+
+_fork_extract = _fork_threading.local()
+_upstream_postprocessor_from_config = youtube_audio_postprocessor_from_config
+_upstream_requested_tier = youtube_requested_tier
+
+
+def youtube_audio_postprocessor_from_config() -> dict:  # noqa: F811
+    if getattr(_fork_extract, 'on', False):
+        return youtube_audio_postprocessor(transcode=False)
+    return _upstream_postprocessor_from_config()
+
+
+def youtube_requested_tier() -> str:  # noqa: F811
+    if getattr(_fork_extract, 'on', False):
+        return 'opus_256'
+    return _upstream_requested_tier()
 
 
 YouTubeClient.refresh_claimed_quality = _fork_refresh_claimed_quality
