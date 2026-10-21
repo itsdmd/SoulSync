@@ -7,7 +7,7 @@ import pytest
 from mutagen.flac import FLAC
 
 from core.fork import album_tagging, edition_merge, retro, tags
-from core.repair_jobs.fork_tools import EditionMergeJob
+from core.repair_jobs.fork_tools import VolumeGroupingJob
 from tests.fork.test_single_merge import Ctx, Library
 
 
@@ -130,10 +130,28 @@ def test_the_job_reports_merges_and_gaps(lib):
     _album(lib, "19", ["Daydreamer", "Best for Last", "Chasing Pavements"])
     _album(lib, "19 (Japan Edition)", ["Daydreamer", "Best for Last", "Bonus Song"],
            durations={"Bonus Song": 251})
-    ctx = Ctx(lib, "fork_edition_merge")
-    result = EditionMergeJob().scan(ctx)
+    ctx = Ctx(lib, "fork_volume_grouping")
+    result = VolumeGroupingJob().scan(ctx)
     kinds = sorted(f["finding_type"] for f in ctx.findings)
     assert kinds == ["fork_album_editions", "fork_edition_gaps"] and result.findings_created == 2
+
+
+def test_a_set_of_duplicates_is_not_also_offered_as_editions(lib):
+    # "21 (Deluxe)" copies sitting in "21"'s own folder: one album split into rows, the duplicates' work
+    plain = _album(lib, "21", ["Rolling", "Rumour"])
+    folder = os.path.dirname(lib.row(plain[0])[2])
+    deluxe = _album(lib, "21 (Deluxe)", ["Rolling", "Rumour", "Lovesong"])
+    conn = lib._get_connection()
+    for tid in deluxe:
+        old = lib.row(tid)[2]
+        new = os.path.join(folder, "x" + os.path.basename(old))
+        os.renames(old, new)
+        conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (new, tid))
+    conn.commit()
+    conn.close()
+    ctx = Ctx(lib, "fork_volume_grouping")
+    VolumeGroupingJob().scan(ctx)
+    assert [f["finding_type"] for f in ctx.findings] == ["fork_album_duplicates"]
 
 
 def test_different_titles_match_only_in_the_same_place_with_the_same_length(lib):

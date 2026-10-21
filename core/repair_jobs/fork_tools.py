@@ -195,9 +195,11 @@ class AutoTranslateJob(RepairJob):
 class VolumeGroupingJob(RepairJob):
     job_id = 'fork_volume_grouping'
     display_name = "Album Grouping"
-    description = "Groups albums split into volumes into one album with discs, and merges albums listed twice"
+    description = ("Makes one album of albums that should be one: volumes, an album listed twice, "
+                   "and editions (Deluxe, Remastered…)")
     help_text = (
-        "Two kinds of albums that should be one.\n\n"
+        "Three kinds of albums that should be one. Each set is handled once: a set of duplicates is not "
+        "also offered as editions.\n\n"
         "Volumes. Some releases come as several albums: \"Footprints of the Traveler, Vol. 1\", \"…, Vol. 2\", "
         "and so on. This finds those sets — same artist, same name apart from the volume marker — "
         "and turns each into a single album: every track gets the common album name, and its volume "
@@ -215,19 +217,32 @@ class VolumeGroupingJob(RepairJob):
         "restored), moves the files into one folder, gives every file the same release tags and joins "
         "the library rows. A file holding another song's audio under this song's name goes too; two "
         "copies of one song with clearly different lengths are kept and listed for you to check. Rows "
-        "with a different release group or year are different albums and stay apart.\n\n"
+        "with a different release group or year are different albums and stay apart. \"X (Deluxe)\" "
+        "counts as a duplicate of \"X\" when their files share a folder. A song that is not on the album "
+        "(on none of its track lists, in the place of another song) goes too, and its place is filled.\n\n"
+        "Editions. \"25\", \"25 (Deluxe Edition)\", \"25 (Japan Edition)\" in folders of their own: same "
+        "artist, same name apart from a note made only of packaging words (Deluxe, Special, Limited, "
+        "Expanded, Anniversary, Remastered, Bonus Tracks, a year, 初回限定盤…); a note with any other word "
+        "(Live, Acoustic, Remixes, Taylor's Version…) keeps the album apart. A song is the same in two "
+        "editions when its title and length match, or — titles differing — its length and file size. "
+        "Editions with the same songs merge into the plain-named one; one holding every song of another "
+        "takes it in (the deluxe keeps its bonus tracks); editions each lacking songs stay apart, with a "
+        "second finding proposing to fill each up (library copies first, the wishlist for the rest).\n\n"
         "In dry run mode (default) each set is a finding you approve; nothing changes until then.\n\n"
         "Settings:\n"
         "- Move Files: also move a volume set's files into one album folder, in Disc 1, Disc 2… "
         "sub-folders (off: only the tags change)\n"
         "- Merge Duplicates: also look for albums listed twice\n"
+        "- Merge Editions: also look for editions of one album\n"
         "- Duration Tolerance: seconds two copies of a song may differ by\n"
-        "- Dry Run: only report, do not change files"
+        "- Minimum Overlap: share of the smaller edition's songs that must match for a set (default 0.5)\n"
+        "- Dry Run: only report, do not change files (filling editions up always waits for you)"
     )
     icon = "repair-icon-album"
     default_enabled = False
     default_interval_hours = 168
-    default_settings = {"move_files": True, "merge_duplicates": True, "duration_tolerance": 3, "dry_run": True}
+    default_settings = {"move_files": True, "merge_duplicates": True, "merge_editions": True,
+                        "duration_tolerance": 3, "min_overlap": 0.5, "dry_run": True}
     auto_fix = True
     writes_library_files = True
 
@@ -236,9 +251,15 @@ class VolumeGroupingJob(RepairJob):
         settings = job_settings(self, context)
         dry_run = is_on(settings.get("dry_run", True))
         move_files = is_on(settings.get("move_files", True))
+        tolerance = float(settings.get("duration_tolerance", 3) or 3)
+        _adopt_edition_findings()
         self._volumes(context, result, dry_run, move_files)
+        claimed: set = set()
         if is_on(settings.get("merge_duplicates", True)) and not context.check_stop():
-            self._duplicates(context, result, dry_run, float(settings.get("duration_tolerance", 3) or 3))
+            claimed = self._duplicates(context, result, dry_run, tolerance)
+        if is_on(settings.get("merge_editions", True)) and not context.check_stop():
+            overlap = min(max(float(settings.get("min_overlap", 0.5) or 0.5), 0.1), 1.0)
+            self._editions(context, result, dry_run, tolerance, overlap, claimed)
         return result
 
     def _volumes(self, context: JobContext, result: JobResult, dry_run: bool, move_files: bool) -> None:
@@ -284,7 +305,8 @@ class VolumeGroupingJob(RepairJob):
             if context.update_progress:
                 context.update_progress(index, len(groups))
 
-    def _duplicates(self, context: JobContext, result: JobResult, dry_run: bool, tolerance: float) -> None:
+    def _duplicates(self, context: JobContext, result: JobResult, dry_run: bool, tolerance: float) -> set:
+        """Albums listed more than once; returns the album ids of the sets found."""
         from core.fork import album_duplicates
 
         def progress(done: int, total: int, label: str) -> None:
@@ -294,10 +316,11 @@ class VolumeGroupingJob(RepairJob):
 
         sets = album_duplicates.find_sets(context.db, tolerance, check_stop=context.check_stop, progress=progress)
         result.scanned += len(sets)
+        claimed = {str(a["album_id"]) for found in sets for a in found["albums"]}
         worker = None
         for found in sets:
             if context.check_stop():
-                return
+                return claimed
             details = {**found, "duration_tolerance": tolerance}
             title, description = album_duplicates.finding_text(details)
             if context.report_progress:
@@ -324,6 +347,80 @@ class VolumeGroupingJob(RepairJob):
             except Exception as exc:
                 logger.debug("could not create finding for %r: %s", found["album"], exc)
                 result.errors += 1
+        return claimed
+
+    def _editions(self, context: JobContext, result: JobResult, dry_run: bool, tolerance: float,
+                  overlap: float, claimed: set) -> None:
+        from core.fork import edition_merge
+
+        def progress(done, total, label):
+            if context.report_progress and (done % 10 == 0 or done == total):
+                context.report_progress(scanned=done, total=total, phase=f"Comparing editions {done} / {total}",
+                                        log_line=label, log_type="info")
+
+        sets = edition_merge.find_sets(context.db, tolerance, overlap, check_stop=context.check_stop,
+                                       progress=progress)
+        result.scanned += len(sets)
+        for found in sets:
+            if context.check_stop():
+                return
+            # a set of duplicates (one album split into rows) is the duplicates' work
+            if any(str(a["id"]) in claimed for a in found["albums"]):
+                continue
+            by_target = {}
+            for source, target in found["merges"]:
+                by_target.setdefault(str(target["id"]), (target, []))[1].append(source)
+            findings = [(edition_merge.MERGE_TYPE, edition_merge.merge_details(t, s, tolerance, 0.85))
+                        for t, s in by_target.values()]
+            if len(found["keepers"]) > 1 and not edition_merge.share_folder(found["keepers"]):
+                findings.append((edition_merge.GAPS_TYPE, edition_merge.gaps_details(
+                    found["keepers"], [s for s, _t in found["merges"]])))
+            for kind, details in findings:
+                title, description = edition_merge.finding_text(kind, details)
+                if context.report_progress:
+                    context.report_progress(log_line=title, log_type="skip")
+                if kind == edition_merge.MERGE_TYPE and not dry_run:
+                    worker = getattr(context, "repair_worker", None) or _worker()
+                    applied = edition_merge.merge(worker, details) if worker else {"success": False}
+                    if applied.get("success"):
+                        result.auto_fixed += int(applied.get("fixed") or 0)
+                    else:
+                        result.errors += 1
+                    continue
+                if not context.create_finding:
+                    continue
+                entity = (details["target"]["album_id"] if kind == edition_merge.MERGE_TYPE
+                          else "+".join(sorted(str(a["album_id"]) for a in details["albums"])))
+                try:
+                    inserted = context.create_finding(
+                        job_id=self.job_id, finding_type=kind, severity="info", entity_type="album",
+                        entity_id=str(entity), file_path=None, title=title, description=description,
+                        details=details)
+                except Exception as exc:
+                    logger.debug("edition finding not created: %s", exc)
+                    result.errors += 1
+                    continue
+                if inserted:
+                    result.findings_created += 1
+                else:
+                    result.findings_skipped_dedup += 1
+
+
+def _adopt_edition_findings() -> None:
+    """Album Edition Merge (``fork_edition_merge``) is part of this job now:
+    its findings move here, and its schedule (a system automation that would
+    only fail on an unknown job) goes."""
+    try:
+        from core.fork import store
+
+        with store.connect() as conn:
+            conn.execute("UPDATE repair_findings SET job_id = 'fork_volume_grouping' "
+                         "WHERE job_id = 'fork_edition_merge'")
+            conn.execute("DELETE FROM automations WHERE owned_by = 'system:repair_job' "
+                         "AND action_type = 'run_repair_job' "
+                         "AND json_extract(action_config, '$.job_id') = 'fork_edition_merge'")
+    except Exception as exc:
+        logger.debug("Album Edition Merge leftovers not moved: %s", exc)
 
 
 
@@ -443,104 +540,6 @@ class LyricsTranslateJob(RepairJob):
         # one run only; a dry run or a run that stopped early leaves it on
         if redo and not dry_run and getattr(result, "completed", False):
             jobs.switch_off(self, context, "retranslate")
-        return result
-
-
-@register_job
-class EditionMergeJob(RepairJob):
-    job_id = 'fork_edition_merge'
-    display_name = "Album Edition Merge"
-    description = "Finds editions of one album (Deluxe, Limited, Remastered…) and merges them into one"
-    help_text = (
-        'The library can hold one album several times: "25", "25 (Deluxe Edition)", "25 (Japan Edition)". '
-        "This finds those sets — same artist, same name apart from a note made only of packaging words "
-        "(Deluxe, Special, Limited, Expanded, Anniversary, Remastered, Bonus Tracks, a year, 初回限定盤…) — "
-        "and compares their songs. A note with any other word (Live, Acoustic, Remixes, Taylor's Version…) "
-        "keeps the album apart.\n\n"
-        "A song is the same in two editions when its title and its length match (within the duration "
-        "tolerance), or — when the titles differ — when its length and file size are all but equal. Two "
-        "editions are a set only when enough of the smaller one's songs match (minimum overlap) and "
-        "hardly any same-titled song differs in length (that would be another recording).\n\n"
-        "What happens to a set:\n"
-        "- the editions hold the same songs: the one with the plain name is kept, the others merge into it\n"
-        "- one edition holds every song of another: the smaller merges into it (the deluxe edition keeps "
-        "its bonus tracks)\n"
-        "- editions each hold songs the other lacks: they stay separate, and a second finding proposes "
-        "filling each up (copies from the library first, the wishlist for the rest); once one holds the "
-        "other, the next scan merges them\n"
-        "A set can have any number of editions.\n\n"
-        "Merging keeps one copy of each song — the better one (more data per second of audio) — filed under "
-        "the kept album with its title and track number. The other copy goes to the deleted-files folder, "
-        "where it can be restored.\n\n"
-        "Settings:\n"
-        "- Duration Tolerance: seconds two copies of a song may differ (default 3)\n"
-        "- Minimum Overlap: share of the smaller edition's songs that must match (default 0.5)\n"
-        "- Dry Run: only report (default); off merges straight away (filling up always waits for you)"
-    )
-    icon = "repair-icon-album"
-    default_enabled = False
-    default_interval_hours = 168
-    default_settings = {"duration_tolerance": 3, "min_overlap": 0.5, "dry_run": True}
-    auto_fix = True
-    writes_library_files = True
-
-    def scan(self, context: JobContext) -> JobResult:
-        from core.fork import edition_merge
-
-        result = JobResult()
-        settings = job_settings(self, context)
-        dry_run = is_on(settings.get("dry_run", True))
-        tolerance = float(settings.get("duration_tolerance", 3) or 3)
-        overlap = min(max(float(settings.get("min_overlap", 0.5) or 0.5), 0.1), 1.0)
-
-        def progress(done, total, label):
-            if context.report_progress and (done % 10 == 0 or done == total):
-                context.report_progress(scanned=done, total=total, phase=f"Comparing editions {done} / {total}",
-                                        log_line=label, log_type="info")
-
-        sets = edition_merge.find_sets(context.db, tolerance, overlap, check_stop=context.check_stop,
-                                       progress=progress)
-        result.scanned = len(sets)
-        for found in sets:
-            if context.check_stop():
-                return result
-            by_target = {}
-            for source, target in found["merges"]:
-                by_target.setdefault(str(target["id"]), (target, []))[1].append(source)
-            findings = [(edition_merge.MERGE_TYPE, edition_merge.merge_details(t, s, tolerance, 0.85))
-                        for t, s in by_target.values()]
-            if len(found["keepers"]) > 1 and not edition_merge.share_folder(found["keepers"]):
-                findings.append((edition_merge.GAPS_TYPE, edition_merge.gaps_details(
-                    found["keepers"], [s for s, _t in found["merges"]])))
-            for kind, details in findings:
-                title, description = edition_merge.finding_text(kind, details)
-                if context.report_progress:
-                    context.report_progress(log_line=title, log_type="skip")
-                if kind == edition_merge.MERGE_TYPE and not dry_run:
-                    worker = getattr(context, "repair_worker", None) or _worker()
-                    applied = edition_merge.merge(worker, details) if worker else {"success": False}
-                    if applied.get("success"):
-                        result.auto_fixed += int(applied.get("fixed") or 0)
-                    else:
-                        result.errors += 1
-                    continue
-                if not context.create_finding:
-                    continue
-                entity = (details["target"]["album_id"] if kind == edition_merge.MERGE_TYPE
-                          else "+".join(sorted(str(a["album_id"]) for a in details["albums"])))
-                try:
-                    inserted = context.create_finding(
-                        job_id=self.job_id, finding_type=kind, severity="info", entity_type="album",
-                        entity_id=str(entity), file_path=None, title=title, description=description,
-                        details=details)
-                except Exception as exc:
-                    logger.debug("edition finding not created: %s", exc)
-                    result.errors += 1
-                    continue
-                if inserted:
-                    result.findings_created += 1
-                else:
-                    result.findings_skipped_dedup += 1
         return result
 
 
