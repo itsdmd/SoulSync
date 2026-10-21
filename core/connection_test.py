@@ -187,6 +187,7 @@ def run_service_test(service, test_config):
                 count = 0
                 found_enough = False
                 for _root, _dirs, files in os.walk(transfer_path):
+                    _dirs[:] = [d for d in _dirs if not d.startswith('.')]   # .deleted, atomic staging
                     for f in files:
                         if os.path.splitext(f)[1].lower() in audio_exts:
                             count += 1

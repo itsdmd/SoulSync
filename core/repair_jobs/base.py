@@ -83,6 +83,24 @@ def is_internal_transfer_dir(path: str, transfer_folder: str) -> bool:
     return False
 
 
+def library_transfer_folder() -> str:
+    """The configured library folder, resolved the way every tool resolves it."""
+    from core.imports.paths import shared_transfer_root
+
+    return shared_transfer_root()
+
+
+def drop_quarantined(rows, path_of, transfer_folder: str = ''):
+    """``rows`` without those whose file sits in SoulSync's own folders (the
+    ``.deleted`` quarantine, the atomic staging tree). A row can point there
+    when a scan indexed the quarantine before it was skipped, and every tool
+    that reads the library's rows would then count a file the user already
+    removed (the duplicate detector offered a copy for deletion that was
+    sitting in ``.deleted``). ``path_of`` reads the file path off a row."""
+    base = transfer_folder or library_transfer_folder()
+    return [row for row in rows if not is_internal_transfer_dir(str(path_of(row) or ''), base)]
+
+
 def skip_deleted_quarantine(root: str, dirs: list, transfer_folder: str) -> None:
     """In-place prune of SoulSync's own folders from an ``os.walk`` ``dirs``
     list (topdown walks only).

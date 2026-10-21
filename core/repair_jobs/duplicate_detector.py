@@ -17,6 +17,7 @@ from core.repair_jobs.base import (
     JobContext,
     JobResult,
     RepairJob,
+    drop_quarantined,
     hand_tagged_path_keys,
     is_hand_tagged_path,
     not_locked_sql,
@@ -112,7 +113,8 @@ class DuplicateDetectorJob(RepairJob):
                 WHERE t.title IS NOT NULL AND t.title != ''
                   AND t.file_path IS NOT NULL AND t.file_path != ''
             """ + locked_filter)
-            tracks = cursor.fetchall()
+            # a copy in the .deleted quarantine is already removed
+            tracks = drop_quarantined(cursor.fetchall(), lambda r: r[4], getattr(context, "transfer_folder", ""))
             # #1315: track_artist only exists for rows written by a post-3.4.6
             # sync. older rows on compilation albums still fall back to the
             # album artist ('Various Artists') and can never match the

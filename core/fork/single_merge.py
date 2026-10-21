@@ -202,6 +202,9 @@ def _load(db: Any, only: Optional[List[Any]] = None) -> Dict[str, Dict[str, Any]
         """ + where, params).fetchall()
     finally:
         conn.close()
+    from core.repair_jobs.base import drop_quarantined
+
+    rows = drop_quarantined(rows, lambda r: r[2])          # copies in .deleted are already removed
     albums: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         (track_id, title, file_path, number, disc, duration, album_id, album_title, record_type, api_count,

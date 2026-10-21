@@ -27,6 +27,7 @@ from flask import Blueprint, jsonify, request, send_file
 
 from core.database_update_worker import DatabaseUpdateWorker
 from core.profile_context import admin_only
+from core.repair_jobs.base import is_internal_transfer_dir, skip_deleted_quarantine
 from core.runtime_state import add_activity_item
 from utils.logging_config import get_logger
 
@@ -409,6 +410,8 @@ def _run_soulsync_full_refresh():
         audio_exts = {'.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.wav', '.wma', '.aiff', '.aif', '.ape'}
         audio_files = []
         for root, _dirs, files in os.walk(transfer_path):
+            # SoulSync's own folders (.deleted quarantine, atomic staging) are not library
+            skip_deleted_quarantine(root, _dirs, transfer_path)
             for fname in files:
                 if os.path.splitext(fname)[1].lower() in audio_exts:
                     audio_files.append(os.path.join(root, fname))
@@ -542,6 +545,9 @@ def _run_soulsync_deep_scan():
         audio_extensions = {'.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.wav', '.wma', '.aiff', '.aif', '.ape'}
         transfer_files = set()
         for root, _dirs, files in os.walk(transfer_path):
+            # not the .deleted quarantine: its files are not "untracked arrivals" to move
+            # back into Staging, and not library tracks either
+            skip_deleted_quarantine(root, _dirs, transfer_path)
             for filename in files:
                 if os.path.splitext(filename)[1].lower() in audio_extensions:
                     transfer_files.add(os.path.join(root, filename))
@@ -613,6 +619,8 @@ def _run_soulsync_deep_scan():
             for root, dirs, _files in os.walk(transfer_path, topdown=False):
                 for d in dirs:
                     dir_path = os.path.join(root, d)
+                    if is_internal_transfer_dir(dir_path, transfer_path):
+                        continue            # the quarantine and staging folders stay, empty or not
                     try:
                         if not os.listdir(dir_path):
                             os.rmdir(dir_path)
@@ -624,7 +632,9 @@ def _run_soulsync_deep_scan():
         stale_count = 0
         stale_track_ids = []
         for db_path in db_paths:
-            if not os.path.exists(db_path):
+            # a row pointing into .deleted is stale too: the file is out of the library
+            # (rows left by a scan that did not skip the quarantine)
+            if not os.path.exists(db_path) or is_internal_transfer_dir(db_path, transfer_path):
                 stale_track_ids.append(db_path)
                 stale_count += 1
 

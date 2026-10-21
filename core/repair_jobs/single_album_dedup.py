@@ -9,6 +9,7 @@ from core.repair_jobs.base import (
     JobContext,
     JobResult,
     RepairJob,
+    drop_quarantined,
     hand_tagged_path_keys,
     is_hand_tagged_path,
     not_locked_sql,
@@ -70,7 +71,7 @@ class SingleAlbumDedupJob(RepairJob):
                 WHERE t.title IS NOT NULL AND t.title != ''
                   AND t.file_path IS NOT NULL AND t.file_path != ''
             """ + locked_filter)
-            tracks = cursor.fetchall()
+            tracks = drop_quarantined(cursor.fetchall(), lambda r: r[6], getattr(context, "transfer_folder", ""))
         except Exception as e:
             logger.error("Error fetching tracks from DB: %s", e, exc_info=True)
             result.errors += 1
